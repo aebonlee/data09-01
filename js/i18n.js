@@ -70,6 +70,21 @@
       storage_fail: '이 브라우저에서는 저장소를 쓸 수 없어 새로고침하면 입력이 사라집니다.',
       footer: '1단계 시연판 · 데이터는 이 브라우저에만 저장됩니다',
       f_e_mail: '이메일(e_mail)', f_phone: '전화번호(phone)', f_req_name: '이름(req_name)', f_user_type: '권한(user_type)', f_territory: '지역(territory_cd)'
+    ,
+      attach_limit: '한 번 제출에 사진 최대 5장, 영상 1개(1분 이하)까지 첨부할 수 있습니다.',
+      attach_count: '사진 {images}장 · 영상 {videos}개', attach_checking: '영상 길이를 확인하는 중입니다…',
+      err_too_many_images: '사진은 한 번에 최대 5장까지 첨부할 수 있습니다.',
+      err_too_many_videos: '영상은 한 번에 1개까지 첨부할 수 있습니다.',
+      err_video_too_long: '영상은 1분(60초) 이하만 첨부할 수 있습니다.',
+      err_bad_file_type: '사진·영상 파일만 첨부할 수 있습니다.',
+      warn_video_duration_unknown: '영상 「{name}」의 길이를 이 브라우저에서 읽지 못했습니다. 1분(60초) 이하인지 직접 확인해 주세요.',
+      err_already_completed: '종료된 건은 후속 요청할 수 없습니다. 새 지원 요청으로 접수해 주세요.',
+      err_bad_date: '날짜를 2026-09-28 형식으로 입력해 주세요.', err_date_before_reg: '완료일은 등록일 이후여야 합니다.',
+      err_date_future: '완료일은 오늘 이후로 적을 수 없습니다.',
+      f_action_content: '조치 내용(Action taken)', f_complete_date: '완료일(Completed date)',
+      close_title: '조치 결과 등록 후 종료', result_title: '조치 결과',
+      close_note: '해결되었으면 실제로 한 조치 내용과 완료일을 적고 종료합니다. 종료한 건은 다시 열 수 없으니, 추가 문의는 새 지원 요청으로 접수해 주세요.',
+      completed_readonly: '이 건은 종료되었습니다. 추가 문의는 새 지원 요청으로 접수해 주세요.'
     },
     en: {
       brand: 'AI Tech Support',
@@ -138,7 +153,21 @@
       sample_badge: 'Sample data', sample_banner: 'You are viewing sample data for demonstration. These are not real support records.',
       storage_fail: 'Browser storage is unavailable; input will be lost on reload.',
       footer: 'Stage 1 demo · data is stored only in this browser',
-      f_e_mail: 'e_mail', f_phone: 'phone', f_req_name: 'req_name', f_user_type: 'user_type', f_territory: 'territory_cd'
+      f_e_mail: 'e_mail', f_phone: 'phone', f_req_name: 'req_name', f_user_type: 'user_type', f_territory: 'territory_cd',
+      attach_limit: 'Up to 5 photos and 1 video (1 minute or shorter) per submission.',
+      attach_count: '{images} photo(s) · {videos} video(s)', attach_checking: 'Checking video length…',
+      err_too_many_images: 'Up to 5 photos per submission.',
+      err_too_many_videos: 'Only 1 video per submission.',
+      err_video_too_long: 'Videos must be 1 minute (60 seconds) or shorter.',
+      err_bad_file_type: 'Only photo and video files can be attached.',
+      warn_video_duration_unknown: 'This browser could not read the length of "{name}". Please make sure it is 1 minute (60 seconds) or shorter.',
+      err_already_completed: 'This request is completed. Please submit a new support request.',
+      err_bad_date: 'Enter the date as 2026-09-28.', err_date_before_reg: 'The completed date must be on or after the registered date.',
+      err_date_future: 'The completed date cannot be in the future.',
+      f_action_content: 'Action taken', f_complete_date: 'Completed date',
+      close_title: 'Record the result and complete', result_title: 'Result',
+      close_note: 'If solved, enter the action actually taken and the completed date, then complete. Completed requests cannot be reopened; submit a new support request for further questions.',
+      completed_readonly: 'This request is completed. Please submit a new support request for further questions.'
     }
   };
   function make(lang) {

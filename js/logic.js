@@ -19,7 +19,7 @@
     Answered: { ko: '회신', en: 'Answered', color: 'blue' },
     Completed: { ko: '종료', en: 'Completed', color: 'black' }
   };
-  // 원본 "Specificatio" 는 오타로 보고 Specification 으로 통일(기획서 10장 5번 확인 필요)
+  // 원본 "Specificatio" 는 오타 — 수강생 확인(2026-09-28 패들릿 댓글 「"Specification"으로 통일」)대로 통일
   var TYPE_CD = [
     { code: 'Troubleshooting', ko: '고장진단' },
     { code: 'Maintenance', ko: '유지보수' },
@@ -41,7 +41,10 @@
 
   // DB.xlsx 시트·필드 순서 (엑셀 가져오기/내보내기 머리행)
   var SHEETS = {
-    '등록': ['ref_no', 'status', 'reg_date', 'reg_id', 'model', 'serial_no', 'o_hour', 'type_cd', 'system_cat'],
+    // action_content(조치 내용)·complete_date(완료일)는 2026-09-28 수강생 확인으로 추가(기획서 10장 6번).
+    // 두 열이 없는 옛 엑셀도 그대로 읽힙니다(빈 값).
+    '등록': ['ref_no', 'status', 'reg_date', 'reg_id', 'model', 'serial_no', 'o_hour', 'type_cd', 'system_cat',
+      'action_content', 'complete_date'],
     '문의': ['ref_no', 's_turn', 'reg_date', 'reg_id', 'phenomenon', 'requirement', 's_image'],
     '회신': ['ref_no', 'r_turn', 'r_reply_date', 'r_title', 'req_summary', 'reply_content', 'ref_info'],
     '사용자': ['reg_id', 'req_name', 'e_mail', 'phone', 'country_cd', 'dealer', 'join_date', 'user_type', 'territory_cd'],
@@ -52,6 +55,12 @@
 
   // 필드 크기 (Data Field정의 시트의 VARCHAR 크기)
   var MAX_LEN = { ref_no: 20, model: 20, serial_no: 20, reg_id: 20, ref_info: 50 };
+
+  // 첨부 제한 — PRD 「사진 최대 5장/영상 1분」, 수강생 확인(2026-09-28)대로 적용.
+  // 한 번 제출(문의 1차수)마다 사진 5장·영상 1개(60초 이하)까지입니다.
+  var ATTACH_LIMIT = { images: 5, videos: 1, videoSeconds: 60 };
+  var IMAGE_EXT = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'heic', 'heif', 'tif', 'tiff'];
+  var VIDEO_EXT = ['mp4', 'mov', 'm4v', 'avi', 'wmv', 'mkv', 'webm', '3gp', 'mpeg', 'mpg'];
 
   function emptyDb() {
     return { mains: [], inquiries: [], replies: [], users: [], sources: [], logs: [] };
@@ -90,6 +99,13 @@
   }
 
   // ── 코드 보조 ────────────────────────────────────────────────
+  // 원본 오타 「Specificatio」와 대소문자 차이를 코드 표기로 맞춥니다(가져오기용)
+  function normTypeCd(v) {
+    var s = String(v == null ? '' : v).trim();
+    if (/^specificatio(n)?$/i.test(s)) return 'Specification';
+    for (var i = 0; i < TYPE_CD.length; i++) if (TYPE_CD[i].code.toLowerCase() === s.toLowerCase()) return TYPE_CD[i].code;
+    return s;
+  }
   function isTypeCd(v) { return TYPE_CD.some(function (t) { return t.code === v; }); }
   function isSystemCat(v) { return SYSTEM_CAT.some(function (t) { return t.code === v; }); }
   function normModel(m) { return String(m || '').trim().toUpperCase(); }
@@ -149,12 +165,46 @@
       .reduce(function (n, q) { return n + splitList(q.s_image).length; }, 0);
   }
 
+  // 첨부 한 건: 파일명 문자열 또는 { name, type(MIME), duration(초, 영상만·모르면 null) }
+  function fileName(f) { return typeof f === 'string' ? f : String((f && f.name) || ''); }
+  function attachKind(f) {
+    var type = typeof f === 'string' ? '' : String((f && f.type) || '');
+    if (/^image\//i.test(type)) return 'image';
+    if (/^video\//i.test(type)) return 'video';
+    var m = fileName(f).match(/\.([A-Za-z0-9]{1,5})$/);
+    var ext = m ? m[1].toLowerCase() : '';
+    if (IMAGE_EXT.indexOf(ext) !== -1) return 'image';
+    if (VIDEO_EXT.indexOf(ext) !== -1) return 'video';
+    return 'other';
+  }
+  // 결과: { ok, errors: [{field:'s_image', code}], warnings: [{code, name}], images, videos }
+  // 영상 길이를 읽지 못했으면(duration 이 null·NaN·Infinity) 막지 않고 경고만 냅니다.
+  function validateAttachments(files) {
+    var errors = [], warnings = [], images = 0, videos = 0;
+    function err(code) { if (!errors.some(function (e) { return e.code === code; })) errors.push({ field: 's_image', code: code }); }
+    (files || []).forEach(function (f) {
+      var kind = attachKind(f);
+      if (kind === 'image') images++;
+      else if (kind === 'video') {
+        videos++;
+        var d = typeof f === 'string' ? null : f.duration;
+        if (typeof d !== 'number' || !isFinite(d)) warnings.push({ code: 'video_duration_unknown', name: fileName(f) });
+        else if (d > ATTACH_LIMIT.videoSeconds) err('video_too_long');
+      } else err('bad_file_type');
+    });
+    if (images > ATTACH_LIMIT.images) err('too_many_images');
+    if (videos > ATTACH_LIMIT.videos) err('too_many_videos');
+    return { ok: errors.length === 0, errors: errors, warnings: warnings, images: images, videos: videos };
+  }
+
   function clone(db) { return JSON.parse(JSON.stringify(db)); }
 
   // ── 신규 등록(기술지원1) ──────────────────────────────────────
-  function createRequest(db, form, user, now, fileNames) {
+  function createRequest(db, form, user, now, files) {
     var v = validateRequest(form, db.sources);
-    if (!v.ok) return { ok: false, errors: v.errors };
+    var a = validateAttachments(files);
+    if (!v.ok || !a.ok) return { ok: false, errors: v.errors.concat(a.errors) };
+    var fileNames = (files || []).map(fileName);
     var out = clone(db);
     var refNo = nextRefNo(out.mains.map(function (m) { return m.ref_no; }), now);
     var date = toDateStr(now);
@@ -162,7 +212,7 @@
     out.mains.push({
       ref_no: refNo, status: STATUS.SUBMITTED, reg_date: date, reg_id: user.reg_id,
       model: src.model, serial_no: String(form.serial_no).trim(), o_hour: parseOHour(form.o_hour),
-      type_cd: form.type_cd, system_cat: form.system_cat
+      type_cd: form.type_cd, system_cat: form.system_cat, action_content: '', complete_date: ''
     });
     out.inquiries.push({
       ref_no: refNo, s_turn: 1, reg_date: date, reg_id: user.reg_id,
@@ -173,15 +223,19 @@
   }
 
   // ── 후속 요청(기술지원3): s_turn 증가, 상태 다시 접수 ───────────
-  function addFollowUp(db, refNo, form, user, now, fileNames) {
+  function addFollowUp(db, refNo, form, user, now, files) {
     var out = clone(db);
     var main = out.mains.filter(function (m) { return m.ref_no === refNo; })[0];
     if (!main) return { ok: false, errors: [{ field: 'ref_no', code: 'not_found' }] };
     if (main.reg_id !== user.reg_id && user.user_type !== 'ADMIN') {
       return { ok: false, errors: [{ field: 'ref_no', code: 'not_owner' }] };
     }
+    // 종료(조치 결과 등록)된 건은 다시 열지 않습니다 — 새 지원 요청으로 접수합니다
+    if (main.status === STATUS.COMPLETED) return { ok: false, errors: [{ field: 'ref_no', code: 'already_completed' }] };
     var v = validateRequest(form, out.sources);
-    if (!v.ok) return { ok: false, errors: v.errors };
+    var a = validateAttachments(files);
+    if (!v.ok || !a.ok) return { ok: false, errors: v.errors.concat(a.errors) };
+    var fileNames = (files || []).map(fileName);
     var turn = maxTurn(out.inquiries, refNo, 's_turn') + 1;
     var src = findSource(out.sources, form.model);
     main.model = src.model;
@@ -316,13 +370,29 @@
     return { ok: true, db: out, r_turn: turn };
   }
 
-  // 정비사가 해결 확인 → 종료. 회신이 없는 건은 종료할 수 없습니다.
-  function completeRequest(db, refNo) {
+  // 정비사가 해결 확인 → 조치 결과(조치 내용·완료일)를 적고 종료.
+  // 회신이 없는 건은 종료할 수 없습니다. 완료일은 등록일 이후·오늘 이전이어야 합니다.
+  // closing: { action_content, complete_date('YYYY-MM-DD', 비우면 오늘) }
+  function completeRequest(db, refNo, closing, now) {
+    closing = closing || {};
+    now = now || new Date();
     var out = clone(db);
     var main = out.mains.filter(function (m) { return m.ref_no === refNo; })[0];
     if (!main) return { ok: false, errors: [{ field: 'ref_no', code: 'not_found' }] };
     if (main.status !== STATUS.ANSWERED) return { ok: false, errors: [{ field: 'status', code: 'not_answered' }] };
+    var errors = [];
+    var action = String(closing.action_content || '').trim();
+    if (!action) errors.push({ field: 'action_content', code: 'required' });
+    var raw = String(closing.complete_date || '').trim();
+    var d = raw ? parseDate(raw) : now;
+    var date = d && !isNaN(d) ? toDateStr(d) : '';
+    if (!date) errors.push({ field: 'complete_date', code: 'bad_date' });
+    else if (main.reg_date && date < main.reg_date) errors.push({ field: 'complete_date', code: 'date_before_reg' });
+    else if (date > toDateStr(now)) errors.push({ field: 'complete_date', code: 'date_future' });
+    if (errors.length) return { ok: false, errors: errors };
     main.status = STATUS.COMPLETED;
+    main.action_content = action;
+    main.complete_date = date;
     return { ok: true, db: out };
   }
 
@@ -360,7 +430,8 @@
         reg_date: m.reg_date, reg_id: m.reg_id, req_name: u.req_name || '', dealer: u.dealer || '',
         model: m.model, type_cd: m.type_cd, system_cat: m.system_cat,
         phenomenon: first.phenomenon || '', requirement: first.requirement || '',
-        r_title: r.r_title || '', reply_content: r.reply_content || ''
+        r_title: r.r_title || '', reply_content: r.reply_content || '',
+        complete_date: m.complete_date || '', action_content: m.action_content || ''
       };
     }).sort(function (a, b) { return a.ref_no < b.ref_no ? 1 : -1; });
   }
@@ -501,7 +572,11 @@
         if ('o_hour' in o) o.o_hour = parseOHour(o.o_hour);
         if ('reg_date' in o) o.reg_date = o.reg_date ? toDateStr(parseDate(o.reg_date) || new Date(NaN)) : '';
         if ('r_reply_date' in o && o.r_reply_date) o.r_reply_date = toDateStr(parseDate(o.r_reply_date));
-        if (o.type_cd === 'Specificatio') o.type_cd = 'Specification';
+        if ('complete_date' in o && o.complete_date) {
+          var cd = parseDate(o.complete_date);
+          o.complete_date = cd ? toDateStr(cd) : o.complete_date;
+        }
+        if ('type_cd' in o) o.type_cd = normTypeCd(o.type_cd);
       });
       db[SHEET_KEYS[name]] = list;
       report.read.push(name + ' ' + list.length + '건');
@@ -522,6 +597,7 @@
   var api = {
     STATUS: STATUS, STATUS_META: STATUS_META, TYPE_CD: TYPE_CD, SYSTEM_CAT: SYSTEM_CAT,
     USER_TYPE: USER_TYPE, TERRITORY_CD: TERRITORY_CD, SHEETS: SHEETS, SHEET_KEYS: SHEET_KEYS, AI_MARK: AI_MARK,
+    ATTACH_LIMIT: ATTACH_LIMIT, attachKind: attachKind, validateAttachments: validateAttachments, normTypeCd: normTypeCd,
     emptyDb: emptyDb, toDateStr: toDateStr, toDateTimeStr: toDateTimeStr, parseDate: parseDate, displayDate: displayDate,
     nextRefNo: nextRefNo, findSource: findSource, parseOHour: parseOHour, validateRequest: validateRequest,
     imageFileNames: imageFileNames, splitList: splitList, createRequest: createRequest, addFollowUp: addFollowUp,

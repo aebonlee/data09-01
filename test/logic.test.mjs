@@ -61,7 +61,7 @@ test('호기 20자 초과 거부', () => {
 
 console.log('신규 등록·후속 요청');
 test('신규 등록: Submitted, s_turn 1, 모델은 소스 표기로 정규화, 첨부명 ref_no_n', () => {
-  const r = L.createRequest(baseDb(), form, user, NOW, ['a.JPG', 'b.mp4', 'noext']);
+  const r = L.createRequest(baseDb(), form, user, NOW, ['a.JPG', 'b.mp4', { name: 'noext', type: 'image/jpeg' }]);
   assert.equal(r.ok, true);
   assert.equal(r.ref_no, '202609280001');
   const m = r.db.mains[0];
@@ -141,15 +141,102 @@ test('회신 저장: r_turn 증가, 상태 Answered, 빈 회신 거부', () => {
 });
 test('종료는 회신 받은 건만', () => {
   let db = L.createRequest(baseDb(), form, user, NOW, []).db;
-  assert.equal(L.completeRequest(db, '202609280001').errors[0].code, 'not_answered');
+  assert.equal(L.completeRequest(db, '202609280001', { action_content: '조치' }, NOW).errors[0].code, 'not_answered');
   db = L.addReply(db, '202609280001', { reply_content: 'a' }, NOW).db;
-  assert.equal(L.completeRequest(db, '202609280001').db.mains[0].status, 'Completed');
+  assert.equal(L.completeRequest(db, '202609280001', { action_content: '조치' }, NOW).db.mains[0].status, 'Completed');
 });
 test('PS 메일 초안에 기준번호·현상 포함', () => {
   const db = L.createRequest(baseDb(), form, user, NOW, []).db;
   const m = L.buildPsMail(db, '202609280001', '근거 없음');
   assert.ok(m.subject.includes('202609280001'));
   assert.ok(m.body.includes('에러코드 219') && m.body.includes('근거 없음'));
+});
+
+console.log('조치 결과(조치 내용·완료일) — 2026-09-28 수강생 확인');
+function answeredDb() {
+  // 등록일 2026-09-20, 회신까지 받은 건
+  let db = L.createRequest(baseDb(), form, user, new Date(2026, 8, 20), []).db;
+  return L.addReply(db, '202609200001', { reply_content: '회신' }, new Date(2026, 8, 21)).db;
+}
+test('종료 시 조치 내용·완료일 저장, 상태 Completed', () => {
+  const r = L.completeRequest(answeredDb(), '202609200001', { action_content: ' 커넥터 재체결 ', complete_date: '2026-09-25' }, NOW);
+  assert.equal(r.ok, true);
+  const m = r.db.mains[0];
+  assert.equal(m.status, 'Completed');
+  assert.equal(m.action_content, '커넥터 재체결');
+  assert.equal(m.complete_date, '2026-09-25');
+});
+test('완료일을 비우면 오늘 날짜, 2026.09.27 표기도 받음', () => {
+  assert.equal(L.completeRequest(answeredDb(), '202609200001', { action_content: 'x' }, NOW).db.mains[0].complete_date, '2026-09-28');
+  assert.equal(L.completeRequest(answeredDb(), '202609200001', { action_content: 'x', complete_date: '2026.09.27' }, NOW).db.mains[0].complete_date, '2026-09-27');
+});
+test('조치 내용 없으면 required, 원본 db 는 그대로', () => {
+  const db = answeredDb();
+  const r = L.completeRequest(db, '202609200001', { action_content: '  ' }, NOW);
+  assert.deepEqual(r.errors, [{ field: 'action_content', code: 'required' }]);
+  assert.equal(db.mains[0].status, 'Answered');
+});
+test('완료일: 등록일 이전·미래·형식 오류 거부, 등록일·오늘 당일은 허용', () => {
+  const c = d => L.completeRequest(answeredDb(), '202609200001', { action_content: 'x', complete_date: d }, NOW);
+  assert.equal(c('2026-09-19').errors[0].code, 'date_before_reg');
+  assert.equal(c('2026-09-29').errors[0].code, 'date_future');
+  assert.equal(c('어제').errors[0].code, 'bad_date');
+  assert.equal(c('2026-09-20').ok, true);
+  assert.equal(c('2026-09-28').ok, true);
+});
+test('종료된 건은 후속 요청 불가(already_completed)', () => {
+  const db = L.completeRequest(answeredDb(), '202609200001', { action_content: 'x' }, NOW).db;
+  assert.equal(L.addFollowUp(db, '202609200001', form, user, NOW, []).errors[0].code, 'already_completed');
+});
+test('신규 등록 행에 빈 조치 필드, 목록 행에 완료일·조치 내용', () => {
+  const db = L.completeRequest(answeredDb(), '202609200001', { action_content: '조치함', complete_date: '2026-09-22' }, NOW).db;
+  const fresh = L.createRequest(baseDb(), form, user, NOW, []).db.mains[0];
+  assert.equal(fresh.action_content, '');
+  assert.equal(fresh.complete_date, '');
+  const row = L.buildListRows(db)[0];
+  assert.equal(row.complete_date, '2026-09-22');
+  assert.equal(row.action_content, '조치함');
+});
+
+console.log('첨부 제한(사진 5장·영상 1개 60초) — 2026-09-28 수강생 확인');
+const imgs = n => Array.from({ length: n }, (_, i) => 'p' + i + '.jpg');
+test('사진 5장은 통과, 6장은 too_many_images', () => {
+  assert.equal(L.validateAttachments(imgs(5)).ok, true);
+  assert.deepEqual(L.validateAttachments(imgs(6)).errors, [{ field: 's_image', code: 'too_many_images' }]);
+});
+test('영상 1개 통과, 2개는 too_many_videos', () => {
+  const v = s => ({ name: 'v.mp4', type: 'video/mp4', duration: s });
+  assert.equal(L.validateAttachments([v(10), ...imgs(5)]).ok, true);
+  assert.equal(L.validateAttachments([v(10), v(10)]).errors[0].code, 'too_many_videos');
+});
+test('영상 길이: 60초 통과, 60.5초·61초 video_too_long', () => {
+  const v = s => [{ name: 'v.mov', type: 'video/quicktime', duration: s }];
+  assert.equal(L.validateAttachments(v(60)).ok, true);
+  assert.equal(L.validateAttachments(v(60.5)).errors[0].code, 'video_too_long');
+  assert.equal(L.validateAttachments(v(61)).errors[0].code, 'video_too_long');
+});
+test('영상 길이를 모르면(null·NaN·Infinity·파일명만) 막지 않고 경고', () => {
+  for (const f of [{ name: 'a.mp4', duration: null }, { name: 'a.mp4', duration: NaN }, { name: 'a.webm', duration: Infinity }, 'a.mp4']) {
+    const r = L.validateAttachments([f]);
+    assert.equal(r.ok, true);
+    assert.equal(r.warnings[0].code, 'video_duration_unknown');
+  }
+});
+test('종류 판정: MIME 우선, 없으면 확장자, 그 밖은 bad_file_type', () => {
+  assert.equal(L.attachKind({ name: 'IMG_0001', type: 'image/heic' }), 'image');
+  assert.equal(L.attachKind('clip.MOV'), 'video');
+  assert.equal(L.attachKind('photo.HEIC'), 'image');
+  assert.equal(L.validateAttachments(['manual.pdf']).errors[0].code, 'bad_file_type');
+});
+test('등록·후속 요청 모두 제출 1회마다 제한 적용, 초과면 저장 안 함', () => {
+  const r = L.createRequest(baseDb(), form, user, NOW, imgs(6));
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.errors, [{ field: 's_image', code: 'too_many_images' }]);
+  let db = L.createRequest(baseDb(), form, user, NOW, imgs(5)).db;
+  const f2 = L.addFollowUp(db, '202609280001', form, user, NOW, imgs(5));
+  assert.equal(f2.ok, true);
+  assert.equal(L.splitList(f2.db.inquiries[1].s_image)[0], '202609280001_6.jpg');
+  assert.equal(L.addFollowUp(db, '202609280001', form, user, NOW, [{ name: 'v.mp4', duration: 75 }]).errors[0].code, 'video_too_long');
 });
 
 console.log('조회·필터');
@@ -229,6 +316,25 @@ test('수강생 원본 형식(제목 행 + 코드 안내 행, 오타 Specificati
   assert.ok(r.report.problems.some(p => p.includes('등록에 없는 ref_no')));
 });
 
+test('옛 등록 시트(조치 열 없음)도 읽고 두 필드는 빈 값', () => {
+  const r = L.sheetsToDb({ '등록': [L.SHEETS['등록'].slice(0, 9),
+    ['202609280001', 'Answered', '2026-09-28', 'u1', '30BRP-X', 'S1', '12.5', 'Troubleshooting', 'Engine']] });
+  assert.equal(r.db.mains[0].action_content, '');
+  assert.equal(r.db.mains[0].complete_date, '');
+});
+test('새 등록 시트: 완료일 표기 정규화, 유형 대소문자·오타 정규화', () => {
+  const r = L.sheetsToDb({ '등록': [L.SHEETS['등록'],
+    ['202609280001', 'Completed', '2026-09-28', 'u1', '30BRP-X', 'S1', '1', 'specification', 'Engine', '재체결', '2026.09.29'],
+    ['202609280002', 'Submitted', '2026-09-28', 'u1', '30BRP-X', 'S1', '1', 'SPECIFICATIO', 'Engine', '', '']] });
+  assert.equal(r.db.mains[0].complete_date, '2026-09-29');
+  assert.equal(r.db.mains[0].action_content, '재체결');
+  assert.equal(r.db.mains[0].type_cd, 'Specification');
+  assert.equal(r.db.mains[1].type_cd, 'Specification');
+});
+test('화면·코드값에 쓰는 유형 표기는 Specification 하나(오타 표기 없음)', () => {
+  assert.deepEqual(L.TYPE_CD.map(t => t.code), ['Troubleshooting', 'Maintenance', 'Specification']);
+});
+
 console.log('예시 데이터');
 test('예시 데이터 자체 정합성: 코드값·ref_no 형식·참조·소스 모델', () => {
   const db = Sample.build(NOW);
@@ -242,6 +348,8 @@ test('예시 데이터 자체 정합성: 코드값·ref_no 형식·참조·소�
     assert.ok(L.findSource(db.sources, m.model), m.model);
     assert.ok(db.users.some(u => u.reg_id === m.reg_id));
     assert.equal(m.ref_no.slice(0, 8), m.reg_date.replace(/-/g, ''));
+    if (m.status === 'Completed') assert.ok(m.action_content && m.complete_date >= m.reg_date, m.ref_no + ' 조치 결과');
+    else assert.equal(m.complete_date, '');
   }
   for (const q of [...db.inquiries, ...db.replies]) assert.ok(refs.has(q.ref_no));
   assert.ok(L.recentOwnRequests(db, 'demo_user01', NOW).length >= 2);

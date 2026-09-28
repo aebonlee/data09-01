@@ -30,11 +30,11 @@
         { notebook_name: 'DEMO-50E 정비매뉴얼(예시)', model: 'DEMO-50E', files: '' }
       ],
       mains: [
-        { ref_no: r1, status: 'Completed', reg_date: d20, reg_id: 'demo_user01', model: '30BRP-X', serial_no: 'UNFCFB18CF0000452', o_hour: 1234.5, type_cd: 'Troubleshooting', system_cat: 'Engine' },
-        { ref_no: r2, status: 'Answered', reg_date: d12, reg_id: 'demo_user01', model: 'DEMO-25D', serial_no: 'DEMO25D-000101', o_hour: 3050, type_cd: 'Maintenance', system_cat: 'Engine' },
-        { ref_no: r3, status: 'Submitted', reg_date: d5, reg_id: 'demo_user02', model: 'DEMO-50E', serial_no: 'DEMO50E-000077', o_hour: 812.3, type_cd: 'Specification', system_cat: 'Drive Axle' },
-        { ref_no: r4, status: 'Submitted', reg_date: d3, reg_id: 'demo_user01', model: '30BRP-X', serial_no: 'UNFCFB18CF0000510', o_hour: 420, type_cd: 'Troubleshooting', system_cat: 'Hydraulic' },
-        { ref_no: r5, status: 'Answered', reg_date: d1, reg_id: 'demo_eu01', model: 'DEMO-25D', serial_no: 'DEMO25D-000233', o_hour: 5210.8, type_cd: 'Troubleshooting', system_cat: 'Electric' }
+        { ref_no: r1, status: 'Completed', reg_date: d20, reg_id: 'demo_user01', model: '30BRP-X', serial_no: 'UNFCFB18CF0000452', o_hour: 1234.5, type_cd: 'Troubleshooting', system_cat: 'Engine', action_content: '(예시) 스텝핑 모터 커넥터 접촉 불량 확인 — 커넥터 재체결 후 에러코드 219 해제, 조향 정상 확인.', complete_date: day(now, 19) },
+        { ref_no: r2, status: 'Answered', reg_date: d12, reg_id: 'demo_user01', model: 'DEMO-25D', serial_no: 'DEMO25D-000101', o_hour: 3050, type_cd: 'Maintenance', system_cat: 'Engine', action_content: '', complete_date: '' },
+        { ref_no: r3, status: 'Submitted', reg_date: d5, reg_id: 'demo_user02', model: 'DEMO-50E', serial_no: 'DEMO50E-000077', o_hour: 812.3, type_cd: 'Specification', system_cat: 'Drive Axle', action_content: '', complete_date: '' },
+        { ref_no: r4, status: 'Submitted', reg_date: d3, reg_id: 'demo_user01', model: '30BRP-X', serial_no: 'UNFCFB18CF0000510', o_hour: 420, type_cd: 'Troubleshooting', system_cat: 'Hydraulic', action_content: '', complete_date: '' },
+        { ref_no: r5, status: 'Answered', reg_date: d1, reg_id: 'demo_eu01', model: 'DEMO-25D', serial_no: 'DEMO25D-000233', o_hour: 5210.8, type_cd: 'Troubleshooting', system_cat: 'Electric', action_content: '', complete_date: '' }
       ],
       inquiries: [
         { ref_no: r1, s_turn: 1, reg_date: d20, reg_id: 'demo_user01', phenomenon: '클러스터에 에러코드 219, Stepper mot Mism 이라고 뜨며 스티어링 휠이 잠긴 상태임.', requirement: '하자원인, 점검사항 및 조치 사항에 대해 알려주세요.', s_image: r1 + '_1.jpg; ' + r1 + '_2.jpg' },

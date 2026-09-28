@@ -181,3 +181,9 @@ table.list td.nowrap { white-space: nowrap; }
 .pick-list .sub { display: block; color: var(--muted); font-size: .9rem; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1b2430; color: #fff; padding: 12px 18px; border-radius: var(--radius); z-index: 100; max-width: calc(100vw - 32px); }
 .toast.error { background: var(--danger); }
+
+/* 조치 결과(2026-09-28 2차) — 완료일은 좁게, 조치 내용은 넓게 */
+.result-card .detail-head { grid-template-columns: minmax(0, 12rem) minmax(0, 1fr); }
+@media (max-width: 600px) { .result-card .detail-head { grid-template-columns: minmax(0, 1fr); } }
+.result-card .body { white-space: pre-line; font-weight: 400; word-break: keep-all; overflow-wrap: break-word; }
+.file-names li.alert { list-style: none; margin-left: -1.2em; }

@@ -1,6 +1,6 @@
-﻿ref_no,status,reg_date,reg_id,model,serial_no,o_hour,type_cd,system_cat
-202609080001,Completed,2026-09-08,demo_user01,30BRP-X,UNFCFB18CF0000452,1234.5,Troubleshooting,Engine
-202609160001,Answered,2026-09-16,demo_user01,DEMO-25D,DEMO25D-000101,3050,Maintenance,Engine
-202609230001,Submitted,2026-09-23,demo_user02,DEMO-50E,DEMO50E-000077,812.3,Specification,Drive Axle
-202609250001,Submitted,2026-09-25,demo_user01,30BRP-X,UNFCFB18CF0000510,420,Troubleshooting,Hydraulic
-202609270001,Answered,2026-09-27,demo_eu01,DEMO-25D,DEMO25D-000233,5210.8,Troubleshooting,Electric
+﻿ref_no,status,reg_date,reg_id,model,serial_no,o_hour,type_cd,system_cat,action_content,complete_date
+202609080001,Completed,2026-09-08,demo_user01,30BRP-X,UNFCFB18CF0000452,1234.5,Troubleshooting,Engine,"(예시) 스텝핑 모터 커넥터 접촉 불량 확인 — 커넥터 재체결 후 에러코드 219 해제, 조향 정상 확인.",2026-09-09
+202609160001,Answered,2026-09-16,demo_user01,DEMO-25D,DEMO25D-000101,3050,Maintenance,Engine,,
+202609230001,Submitted,2026-09-23,demo_user02,DEMO-50E,DEMO50E-000077,812.3,Specification,Drive Axle,,
+202609250001,Submitted,2026-09-25,demo_user01,30BRP-X,UNFCFB18CF0000510,420,Troubleshooting,Hydraulic,,
+202609270001,Answered,2026-09-27,demo_eu01,DEMO-25D,DEMO25D-000233,5210.8,Troubleshooting,Electric,,

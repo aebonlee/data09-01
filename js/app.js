@@ -93,6 +93,26 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
   }
 
+  // 영상 길이(초)를 <video> 메타데이터로 읽습니다. 못 읽으면(코덱 미지원·시간 초과) null
+  function readDuration(file) {
+    return new Promise(function (resolve) {
+      var url, v = document.createElement('video'), done = false, timer;
+      function finish(d) {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        v.removeAttribute('src'); try { v.load(); } catch (e) { /* 무시 */ }
+        if (url) URL.revokeObjectURL(url);
+        resolve(typeof d === 'number' && isFinite(d) ? d : null);
+      }
+      try { url = URL.createObjectURL(file); } catch (e) { resolve(null); return; }
+      timer = setTimeout(function () { finish(null); }, 8000);
+      v.preload = 'metadata'; v.muted = true;
+      v.onloadedmetadata = function () { finish(v.duration); };
+      v.onerror = function () { finish(null); };
+      v.src = url;
+    });
+  }
+
   function statusBadge(st) {
     var m = L.STATUS_META[st] || { ko: st, en: st, color: 'black' };
     return h('span', { class: 'status ' + m.color }, lang === 'en' ? m.en : m.ko);
@@ -130,7 +150,7 @@
     });
     errors.forEach(function (er) {
       var f = form.querySelector('.field[data-field="' + er.field + '"]');
-      if (!f) return;
+      if (!f) { toast(t('err_' + er.code), true); return; }
       f.classList.add('invalid');
       var e = f.querySelector('.err'); e.hidden = false; e.textContent = t('err_' + er.code);
     });
@@ -289,16 +309,50 @@
       system_cat: mainRow.system_cat, phenomenon: q ? q.phenomenon : '', requirement: q ? q.requirement : ''
     } : {};
     var modelList = h('datalist', { id: 'modelList' }, db.sources.map(function (s) { return h('option', { value: s.model }); }));
+    if (mainRow && mainRow.status === 'Completed') {
+      main.appendChild(h('div', { class: 'page-head' }, h('h1', null, t('btn_follow'))));
+      main.appendChild(h('div', { class: 'card' }, h('p', null, t('completed_readonly')),
+        h('div', { class: 'btn-row' }, h('a', { class: 'btn btn-primary', href: '#/request' }, t('btn_new')),
+          h('a', { class: 'btn', href: '#/detail/' + refNo }, t('detail_title')))));
+      return;
+    }
     var fileNames = h('ul', { class: 'file-names', hidden: true });
     var fileInput = h('input', { type: 'file', name: 's_image', multiple: true, accept: 'image/*,video/*' });
     var existing = mainRow ? db.inquiries.filter(function (x) { return x.ref_no === refNo; })
       .reduce(function (n, x) { return n + L.splitList(x.s_image).length; }, 0) : 0;
-    fileInput.addEventListener('change', function () {
-      var names = Array.prototype.map.call(fileInput.files, function (f) { return f.name; });
+    // 첨부 제한(사진 5장·영상 1개 60초): 파일을 고르면 영상 길이를 읽어 바로 확인합니다
+    var attachMeta = [], attachPending = Promise.resolve(), attachToken = 0;
+    var attachField = h('div', { class: 'field span-all', 'data-field': 's_image' }, h('span', null, t('f_s_image')), fileInput,
+      h('small', { class: 'note' }, t('attach_limit')), h('small', { class: 'note' }, t('attach_note')), fileNames,
+      h('small', { class: 'err', hidden: true }));
+    function showAttach() {
+      var names = attachMeta.map(function (f) { return f.name; });
+      var check = L.validateAttachments(attachMeta);
+      var preview = L.imageFileNames(refNo || 'yyyymmddnnnn', names, existing + 1);
       fileNames.textContent = '';
       fileNames.hidden = !names.length;
-      var preview = L.imageFileNames(refNo || 'yyyymmddnnnn', names, existing + 1);
+      if (names.length) fileNames.appendChild(h('li', { class: 'note' }, t('attach_count', { images: check.images, videos: check.videos })));
       names.forEach(function (n, i) { fileNames.appendChild(h('li', null, n + ' → ' + preview[i])); });
+      check.warnings.forEach(function (w) { fileNames.appendChild(h('li', { class: 'alert warn' }, t('warn_' + w.code, { name: w.name }))); });
+      var e = attachField.querySelector('.err');
+      attachField.classList.toggle('invalid', !check.ok);
+      e.hidden = check.ok;
+      e.textContent = check.errors.map(function (x) { return t('err_' + x.code); }).join(' ');
+    }
+    fileInput.addEventListener('change', function () {
+      var token = ++attachToken;
+      var files = Array.prototype.slice.call(fileInput.files);
+      attachMeta = files.map(function (f) { return { name: f.name, type: f.type, duration: null }; });
+      fileNames.textContent = '';
+      fileNames.hidden = !files.length;
+      if (files.some(function (f) { return L.attachKind(f) === 'video'; })) fileNames.appendChild(h('li', { class: 'note' }, t('attach_checking')));
+      attachPending = Promise.all(files.map(function (f) {
+        return L.attachKind(f) === 'video' ? readDuration(f) : Promise.resolve(null);
+      })).then(function (durations) {
+        if (token !== attachToken) return;
+        durations.forEach(function (d, i) { attachMeta[i].duration = d; });
+        showAttach();
+      });
     });
 
     var form = h('form', { class: 'card', novalidate: true },
@@ -317,8 +371,7 @@
         h('div', { class: 'field' }),
         field(t('f_phenomenon'), h('textarea', { name: 'phenomenon', value: v.phenomenon || '' }), { name: 'phenomenon', span: true }),
         field(t('f_requirement'), h('textarea', { name: 'requirement', value: v.requirement || '' }), { name: 'requirement', span: true }),
-        h('div', { class: 'field span-all' }, h('span', null, t('f_s_image')), fileInput,
-          h('small', { class: 'note' }, t('attach_note')), fileNames)),
+        attachField),
       modelList,
       h('div', { class: 'submit-bar' }, h('button', { class: 'btn btn-primary btn-big', type: 'submit' }, t('btn_submit'))));
     // textarea value 는 속성이 아니라 속성값으로 넣어야 보입니다
@@ -327,9 +380,12 @@
 
     form.addEventListener('submit', function (e) {
       e.preventDefault();
+      attachPending.then(submit); // 영상 길이 확인이 끝난 뒤 제출합니다
+    });
+    function submit() {
       var data = fd(form);
-      var names = Array.prototype.map.call(fileInput.files, function (f) { return f.name; });
-      var res = refNo ? L.addFollowUp(db, refNo, data, u, now(), names) : L.createRequest(db, data, u, now(), names);
+      var files = attachMeta;
+      var res = refNo ? L.addFollowUp(db, refNo, data, u, now(), files) : L.createRequest(db, data, u, now(), files);
       if (!res.ok) {
         showErrors(form, res.errors);
         var modelErr = res.errors.filter(function (x) { return x.field === 'model' && x.code === 'model_not_registered'; })[0];
@@ -343,7 +399,7 @@
       save(res.db);
       toast(refNo ? t('followed_ok', { ref: res.ref_no, turn: res.s_turn }) : t('submitted_ok', { ref: res.ref_no }));
       go('#/detail/' + res.ref_no);
-    });
+    }
 
     main.appendChild(h('div', { class: 'page-head' },
       h('h1', null, refNo ? t('btn_follow') : t('btn_new')),
@@ -357,7 +413,8 @@
   // 기술지원2 — 최근 1달 본인 등록 건 팝업
   function pickFollowUp() {
     var u = me();
-    var rows = L.recentOwnRequests(db, u.reg_id, now());
+    // 종료된 건은 다시 열지 않으므로 목록에서 뺍니다
+    var rows = L.recentOwnRequests(db, u.reg_id, now()).filter(function (m) { return m.status !== 'Completed'; });
     var content = rows.length ? h('ul', { class: 'pick-list' }, rows.map(function (m) {
       var q = L.latestInquiry(db, m.ref_no) || {};
       return h('li', null, h('button', {
@@ -399,15 +456,16 @@
     var cols = admin ? [
       ['status', 'f_status'], ['ref_no', 'f_ref_no'], ['count', 'f_count'], ['reg_date', 'f_reg_date'], ['req_name', 'f_name'],
       ['dealer', 'f_dealer'], ['model', 'f_model'], ['type_cd', 'f_type_cd'], ['phenomenon', 'f_phenomenon'],
-      ['requirement', 'f_requirement'], ['r_title', 'f_title'], ['reply_content', 'f_reply']
+      ['requirement', 'f_requirement'], ['r_title', 'f_title'], ['reply_content', 'f_reply'],
+      ['complete_date', 'f_complete_date'], ['action_content', 'f_action_content']
     ] : [
       ['status', 'f_status'], ['ref_no', 'f_ref_no'], ['reg_date', 'f_reg_date'], ['reg_id', 'f_reg_id'], ['model', 'f_model'],
       ['type_cd', 'f_type_cd'], ['phenomenon', 'f_phenomenon'], ['requirement', 'f_requirement'], ['r_title', 'f_title']
     ];
-    var longCols = ['phenomenon', 'requirement', 'r_title', 'reply_content'];
+    var longCols = ['phenomenon', 'requirement', 'r_title', 'reply_content', 'action_content'];
     function cell(r, k) {
       if (k === 'status') return statusBadge(r.status);
-      if (k === 'reg_date') return L.displayDate(r.reg_date);
+      if (k === 'reg_date' || k === 'complete_date') return L.displayDate(r[k]);
       if (k === 'type_cd') return typeLabel(r.type_cd);
       if (longCols.indexOf(k) !== -1) return h('div', { class: 'clip-text' }, r[k]);
       return String(r[k] == null ? '' : r[k]);
@@ -492,23 +550,39 @@
     var buttons = h('div', { class: 'btn-row' });
     if (admin) {
       buttons.appendChild(h('a', { class: 'btn', href: '#/sources/' + refNo }, t('btn_to_source')));
-    } else {
+    } else if (m.status !== 'Completed') {
       buttons.appendChild(h('a', { class: 'btn btn-primary', href: '#/request/' + refNo }, t('btn_add_request')));
-      if (m.status === 'Answered') buttons.appendChild(h('button', {
-        class: 'btn', type: 'button', onclick: function () {
-          var res = L.completeRequest(db, refNo);
-          if (!res.ok) { toast(t('err_' + res.errors[0].code), true); return; }
-          save(res.db); toast(t('completed_ok')); render();
-        }
-      }, t('btn_complete')));
     }
     buttons.appendChild(h('a', { class: 'btn', href: '#/list' }, t('btn_close')));
+
+    // 조치 결과 — 종료된 건은 조치 내용·완료일을 보여 주고(옛 데이터는 비어 있을 수 있음),
+    // 회신 받은 본인 건은 조치 결과를 적어 종료합니다
+    var closing = null;
+    if (m.status === 'Completed') {
+      closing = h('div', { class: 'card result-card' }, h('h2', null, t('result_title')),
+        h('div', { class: 'detail-head' },
+          kv(t('f_complete_date'), m.complete_date ? L.displayDate(m.complete_date) : '-'),
+          kv(t('f_action_content'), h('span', { class: 'body' }, m.action_content || '-'))));
+    } else if (!admin && m.status === 'Answered') {
+      var closeForm = h('form', { class: 'form-grid', novalidate: true },
+        field(t('f_action_content'), h('textarea', { name: 'action_content', rows: 4 }), { name: 'action_content', span: true }),
+        field(t('f_complete_date'), h('input', { type: 'date', name: 'complete_date', value: L.toDateStr(now()), min: m.reg_date, max: L.toDateStr(now()) }), { name: 'complete_date' }),
+        h('div', { class: 'span-all submit-bar' }, h('button', { class: 'btn btn-primary btn-big', type: 'submit' }, t('btn_complete'))));
+      closeForm.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var res = L.completeRequest(db, refNo, fd(closeForm), now());
+        if (!res.ok) { showErrors(closeForm, res.errors); return; }
+        save(res.db); toast(t('completed_ok')); render();
+      });
+      closing = h('div', { class: 'card close-card' }, h('h2', null, t('close_title')), h('p', { class: 'note' }, t('close_note')), closeForm);
+    }
 
     main.appendChild(h('div', { class: 'page-head' },
       h('div', { style: 'margin-right:auto' }, h('h1', null, t('detail_title')), h('p', { class: 'note' }, t('detail_sub'))), buttons));
     main.appendChild(head);
     main.appendChild(h('div', { class: 'card' }, thread));
-    if (admin) main.appendChild(aiPanel(refNo));
+    if (closing) main.appendChild(closing);
+    if (admin && m.status !== 'Completed') main.appendChild(aiPanel(refNo));
   }
 
   // AI 회신 — 프롬프트 생성 → 붙여넣기 → 나누기 → 저장 (반자동)
