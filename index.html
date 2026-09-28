@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 기술지원 — 지게차 현장 기술지원 접수·조회</title>
+  <meta name="description" content="현장 정비사의 기술 문의를 정형 양식으로 접수하고, 매뉴얼 기반 AI 회신을 붙여 넣어 기준번호별로 쌓는 브라우저용 기술지원 도구(1단계 시연판)">
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+  <header class="site-header">
+    <div class="inner header-inner">
+      <a class="brand" href="#/list">
+        <span class="brand-name" data-t="brand">AI 기술지원</span>
+        <span class="brand-sub" data-t="brandSub">지게차 현장 기술지원 접수·조회</span>
+      </a>
+      <nav class="nav" id="nav" aria-label="주 메뉴"></nav>
+      <div class="header-tools">
+        <label class="lang">
+          <span class="sr" data-t="lang">언어</span>
+          <select id="langSelect" aria-label="언어">
+            <option value="ko">한글</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <span id="whoami" class="whoami"></span>
+        <button type="button" id="authBtn" class="btn btn-ghost"></button>
+      </div>
+    </div>
+  </header>
+
+  <div id="sampleBanner" class="sample-banner" hidden></div>
+
+  <main id="main" class="inner main" tabindex="-1"></main>
+
+  <footer class="site-footer">
+    <div class="inner" data-t="footer">1단계 시연판 · 데이터는 이 브라우저에만 저장됩니다</div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="dialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="dialogTitle"></h2>
+      <div id="dialogContent"></div>
+      <div class="dialog-actions" id="dialogActions">
+        <button class="btn" value="close">닫기</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 로컬 파일(file://)로 열어도 돌도록 module 이 아닌 일반 스크립트로 불러옵니다 -->
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="js/logic.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/sample-data.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

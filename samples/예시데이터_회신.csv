@@ -1,0 +1,6 @@
+﻿ref_no,r_turn,r_reply_date,r_title,req_summary,reply_content,ref_info
+202609080001,1,2026-09-08,에러코드 219 (Stepper mot Mism) 표출 및 스티어링 휠 잠김,클러스터에 에러코드 219가 뜨고 스티어링 휠이 잠김. 하자 원인과 점검·조치 사항 요청.,"클러스터 디스플레이에 에러코드 219 (STEPPER MOTOR MISM / Stepper mot Mism)이 표출되며 스티어링 휠이 잠기는 현상은, ZAPI EPS-AC0(조향 컨트롤러)가 조향 핸들 하단의 스텝핑 모터 신호 이상을 감지하여 안전을 위해 조향 구동을 즉시 차단(Steer Cut-off)했기 때문에 발생합니다.
+(예시 회신 — 점검·조치 절차는 실제 매뉴얼로 확인해야 합니다.)",30BRP-X 정비매뉴얼(예시) p.000
+202609160001,1,2026-09-16,(예시) 엔진오일·필터 교환 주기,(예시) 가동시간 기준 엔진오일·필터 교환 주기 문의.,(예시 회신) 정기 점검표의 교환 주기를 확인하세요. 이 문장은 시연용이며 실제 값이 아닙니다.,DEMO-25D 정비매뉴얼(예시) p.000
+202609160001,2,2026-09-23,(예시) 가혹 조건 교환 주기,(예시) 분진이 많은 현장에서의 교환 주기 문의.,(예시 회신) 가혹 조건 항목을 확인하세요. 이 문장은 시연용이며 실제 값이 아닙니다.,DEMO-25D 정비매뉴얼(예시) p.000; DEMO-25D 정비매뉴얼(예시) p.001
+202609270001,1,2026-09-28,(Sample) Dashboard lamp flicker at start,(Sample) Lamps flicker when starting the engine.,(Sample reply) Check the battery and ground connections first. This text is for demonstration only.,DEMO-25D Manual (sample) p.000
