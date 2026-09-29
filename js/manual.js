@@ -68,6 +68,11 @@
   function pageLabel(text) {
     var lines = String(text || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
     for (var i = lines.length - 1; i >= 0; i--) if (LABEL_RE.test(lines[i])) return lines[i];
+    // 쪽 표기 앞에 그림 조각 글자(';' 등)가 붙어 나오는 쪽이 있습니다(BCS-9U 운전자 매뉴얼 ';   1-19')
+    for (var k = lines.length - 1; k >= Math.max(0, lines.length - 3); k--) {
+      var bare = lines[k].replace(/^[^A-Za-z0-9]+/, '');
+      if (bare !== lines[k] && LABEL_RE.test(bare)) return bare;
+    }
     for (var j = lines.length - 1; j >= Math.max(0, lines.length - 2); j--) {
       var m = lines[j].match(LABEL_OF_RE);
       if (m) return String(Number(m[1]));
@@ -80,7 +85,8 @@
   // 쪽 표기로 끝나는 줄(점선·대시 리더 포함)을 항목으로, 쪽 표기가 없는 굵은 제목 줄을 큰 제목으로 봅니다.
   // 정규식을 잘게 나눈 이유: 점선 리더를 한 식으로 잡으면(중첩 반복) 리더가 긴 줄에서 역추적이 폭발합니다.
   // 쪽 표기는 '6-17' 또는 숫자만('121'). 숫자만인 것은 점선 리더가 있을 때만 목차 항목으로 봅니다(본문 숫자 오인 방지)
-  var TOC_LABEL_END = /\s*((?:\d{1,2}|[A-Z])-\d{1,3}|\d{1,4})$/;
+  // 끼워 넣은 쪽 '7-23-1'(B-9U 운전자 매뉴얼)도 받습니다 — 전에는 끝의 '23-1' 만 잡혀 없는 쪽을 가리켰습니다
+  var TOC_LABEL_END = /\s*((?:\d{1,2}|[A-Z])-\d{1,3}(?:-\d{1,2})?|\d{1,4})$/;
   var TOC_LEADER = /[.\-·–—]\s?[.\-·–—]\s?[.\-·–—]/;
   var TOC_NUMBERED = /^(?:Group\s*\d+|\d{1,2}\.)\s*\S/i;
   function tocEntry(s) {
@@ -101,7 +107,7 @@
   // 한 줄 → 단 조각 [{ text, col(시작 칸) }]. 넓은 빈칸(5칸 이상, 쪽 표기 뒤면 3칸 이상)에서 자르되, 'GROUP1   SAFETY HINTS' 처럼
   // 왼쪽이 번호뿐이거나 오른쪽이 리더·쪽 표기뿐이면 한 조각으로 둡니다.
   var BARE_NUM = /^(?:GROUP\s*\d+|SECTION\s*\d+|\d{1,2}\.?)$/i;
-  var ONLY_LABEL = /^[.\-·–—\s]*(?:(?:\d{1,2}|[A-Z])-\d{1,3}|\d{1,4})$/;
+  var ONLY_LABEL = /^[.\-·–—\s]*(?:(?:\d{1,2}|[A-Z])-\d{1,3}(?:-\d{1,2})?|\d{1,4})$/;
   function tocSegments(raw) {
     var segs = [], re = /\S+(?: {1,2}\S+)*/g, m;
     while ((m = re.exec(String(raw || '')))) segs.push({ text: m[0], col: m.index });
@@ -183,6 +189,33 @@
         if (k != null && map[k] + (t - k) <= total) e.page = map[k] + (t - k);
       }
     });
+    // 목차와 본문이 한두 쪽 어긋난 매뉴얼(BCS-9U·B-9U 운전자 매뉴얼 — 목차 3-5, 본문 3-4)이 있어,
+    // 연결된 쪽에 항목 제목이 없으면 앞뒤 2쪽 안에서 제목이 있는 가장 가까운 쪽으로 옮깁니다.
+    // '3-20' 처럼 본문에 없는 쪽 표기(목차만 한 쪽 밀림)는 같은 장의 앞 쪽 표기 두 개까지를 출발점으로 삼습니다.
+    // 제목을 찾지 못하면 그대로 둡니다(추측으로 옮기지 않음).
+    var byN = {};
+    (pages || []).forEach(function (p) { byN[p.n] = p; });
+    entries.forEach(function (e) {
+      if (!e.label) return;
+      var key = titleKey(e.title);
+      if (key.length < 6) return;
+      var start = e.page;
+      if (start == null) {
+        var lm = String(e.label).match(/^((?:\d{1,2}|[A-Z])-)(\d{1,3})$/);
+        for (var d = 1; lm && start == null && d <= 2; d++) {
+          var prevLab = lm[1] + (Number(lm[2]) - d);
+          if (map[prevLab] != null) start = map[prevLab];
+        }
+      }
+      if (start == null) return;
+      if (e.page != null && hasTitle(byN[start], key)) return;
+      if (e.page == null && hasHeading(byN[start], key)) { e.page = start; e.moved = true; return; }
+      var order = e.page == null ? [1, 2, -1] : [-1, 1, -2, 2];
+      for (var i = 0; i < order.length; i++) {
+        var q = byN[start + order[i]];
+        if (q && tocPages.indexOf(q.n) === -1 && hasHeading(q, key)) { e.page = q.n; e.moved = true; return; }
+      }
+    });
     // 큰 제목의 쪽은 바로 아래 첫 항목의 쪽
     entries.forEach(function (e, i) {
       if (e.level === 1 && e.page == null) {
@@ -192,6 +225,24 @@
       }
     });
     return { entries: entries, tocPages: tocPages };
+  }
+
+  // 목차 제목 → 본문 대조용 열쇠: 번호(1. · Group 2)를 떼고 영문·숫자만 대문자로, 앞 24자
+  function titleKey(title) {
+    return String(title || '').replace(/^(?:SECTION\s*\d+|GROUP\s*\d+|\d{1,2}\.)\s*/i, '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 24);
+  }
+  function hasTitle(p, key) {
+    return !!p && String(p.text || '').toUpperCase().replace(/[^A-Z0-9]/g, '').indexOf(key) !== -1;
+  }
+  // 옮길 쪽은 본문 속 낱말이 아니라 제목 줄이 있는 쪽이어야 합니다 — 대문자로 적힌 줄이 제목으로 시작할 때.
+  // (본문 「Battery charging installations must …」 에 끌려 「16. Battery charging」 이 한 쪽 앞으로 가던 것을 막음)
+  function hasHeading(p, key) {
+    if (!p) return false;
+    return String(p.text || '').split('\n').some(function (l) {
+      var t = l.trim();
+      if (!/[A-Z]/.test(t) || t !== t.toUpperCase()) return false;
+      return titleKey(t).indexOf(key) === 0;
+    });
   }
 
   // 이 쪽이 속한 목차 항목 (큰 제목 › 항목)
@@ -212,7 +263,8 @@
   // 파일 이름에서 적용 모델을 짐작합니다. 예: '15182023BRP-X OM' → 15BRP-X; 18BRP-X; 20BRP-X; 23BRP-X
   function guessModels(fileName) {
     var base = String(fileName || '').replace(/\.[^.]+$/, '');
-    var m = base.match(/^((?:\d{2})+)\s*([A-Z]{2,}[A-Z0-9]*(?:-[A-Z0-9]+)?)/i);
+    // 계열 글자가 하나뿐인 이름('2225303235B-9' → 22B-9 … 35B-9)도 받습니다
+    var m = base.match(/^((?:\d{2})+)\s*([A-Z]+[A-Z0-9]*(?:-[A-Z0-9]+)?)/i);
     if (m) {
       var fam = m[2].toUpperCase();
       return m[1].match(/\d{2}/g).map(function (d) { return d + fam; }).join('; ');

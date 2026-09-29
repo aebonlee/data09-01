@@ -48,7 +48,23 @@
         { notebook_name: '25/30/35DE-7', model: '35DE-7', files: '253035DE-7 OM; 253035DE-7 SM' },
         { notebook_name: '25/30/35LE-7', model: '25LE-7', files: '253035LE-7 OM; 253035LE-7 SM' },
         { notebook_name: '25/30/35LE-7', model: '30LE-7', files: '253035LE-7 OM; 253035LE-7 SM' },
-        { notebook_name: '25/30/35LE-7', model: '35LE-7', files: '253035LE-7 OM; 253035LE-7 SM' }
+        { notebook_name: '25/30/35LE-7', model: '35LE-7', files: '253035LE-7 OM; 253035LE-7 SM' },
+        // 2026-09-29 저녁 「Manual 추가」(Manual_03.zip)의 새 대응표 — B-9·B-9U·BCS-9·BCS-9U 15개 모델
+        { notebook_name: '22/25/30/32/35B-9', model: '22B-9', files: '2225303235B-9_OM; 2225303235B-9_SM' },
+        { notebook_name: '22/25/30/32/35B-9', model: '25B-9', files: '2225303235B-9_OM; 2225303235B-9_SM' },
+        { notebook_name: '22/25/30/32/35B-9', model: '30B-9', files: '2225303235B-9_OM; 2225303235B-9_SM' },
+        { notebook_name: '22/25/30/32/35B-9', model: '32B-9', files: '2225303235B-9_OM; 2225303235B-9_SM' },
+        { notebook_name: '22/25/30/32/35B-9', model: '35B-9', files: '2225303235B-9_OM; 2225303235B-9_SM' },
+        { notebook_name: '25/30/32/35B-9U', model: '25B-9U', files: '25303235B-9U_OM; 25303235B-9U_SM' },
+        { notebook_name: '25/30/32/35B-9U', model: '30B-9U', files: '25303235B-9U_OM; 25303235B-9U_SM' },
+        { notebook_name: '25/30/32/35B-9U', model: '32B-9U', files: '25303235B-9U_OM; 25303235B-9U_SM' },
+        { notebook_name: '25/30/32/35B-9U', model: '35B-9U', files: '25303235B-9U_OM; 25303235B-9U_SM' },
+        { notebook_name: '15/18/20BCS-9', model: '15BCS-9', files: '151820BCS-9_OM; 151820BCS-9_SM' },
+        { notebook_name: '15/18/20BCS-9', model: '18BCS-9', files: '151820BCS-9_OM; 151820BCS-9_SM' },
+        { notebook_name: '15/18/20BCS-9', model: '20BCS-9', files: '151820BCS-9_OM; 151820BCS-9_SM' },
+        { notebook_name: '15/18/20BCS-9U', model: '15BCS-9U', files: '151820BCS-9U OM ENG; 151820BCS-9U SM ENG' },
+        { notebook_name: '15/18/20BCS-9U', model: '18BCS-9U', files: '151820BCS-9U OM ENG; 151820BCS-9U SM ENG' },
+        { notebook_name: '15/18/20BCS-9U', model: '20BCS-9U', files: '151820BCS-9U OM ENG; 151820BCS-9U SM ENG' }
       ],
       mains: [
         { ref_no: r1, status: 'Completed', reg_date: d20, reg_id: 'demo_user01', model: '30BRP-X', serial_no: 'UNFCFB18CF0000452', o_hour: 1234.5, type_cd: 'Troubleshooting', system_cat: 'Engine', action_content: '(예시) 스텝핑 모터 커넥터 접촉 불량 확인 — 커넥터 재체결 후 에러코드 219 해제, 조향 정상 확인.', complete_date: day(now, 19), complete_image: r1 + '_C1.jpg' },

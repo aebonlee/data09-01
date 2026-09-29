@@ -41,7 +41,8 @@ def page_label(text):
 def guess_models(file_name):
     """js/manual.js guessModels 와 같은 규칙. '15182023BRP-X OM' → 15BRP-X; 18BRP-X; 20BRP-X; 23BRP-X"""
     base = os.path.splitext(os.path.basename(file_name))[0]
-    m = re.match(r'^((?:\d{2})+)\s*([A-Z]{2,}[A-Z0-9]*(?:-[A-Z0-9]+)?)', base, re.I)
+    # 계열 글자가 하나뿐인 이름('2225303235B-9' → 22B-9 … 35B-9)도 받습니다
+    m = re.match(r'^((?:\d{2})+)\s*([A-Z]+[A-Z0-9]*(?:-[A-Z0-9]+)?)', base, re.I)
     if m:
         fam = m.group(2).upper()
         return '; '.join(d + fam for d in re.findall(r'\d{2}', m.group(1)))

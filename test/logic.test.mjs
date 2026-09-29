@@ -670,6 +670,66 @@ test('접수 모델 → 소스 등록 대응표의 매뉴얼을 먼저(.pdf 유�
   assert.equal(M.search(ixs, 'stepper', { model: '25DE-7', sources }).match, 'source');
 });
 
+console.log('매뉴얼 3차 형식 — B-9·B-9U·BCS-9·BCS-9U (2026-09-29 저녁)');
+test('파일 이름 → 적용 모델: 계열 글자가 하나인 이름(2225303235B-9 → 22·25·30·32·35B-9)', () => {
+  assert.equal(M.guessModels('2225303235B-9_OM.pdf'), '22B-9; 25B-9; 30B-9; 32B-9; 35B-9');
+  assert.equal(M.guessModels('25303235B-9U_SM.pdf'), '25B-9U; 30B-9U; 32B-9U; 35B-9U');
+  assert.equal(M.guessModels('151820BCS-9U OM ENG.pdf'), '15BCS-9U; 18BCS-9U; 20BCS-9U');
+  assert.equal(M.guessModels('100D-9V OM EXP.pdf'), '100D-9V'); // 기존 형식 그대로
+  assert.equal(M.guessModels('15182023BRP-X OM.pdf'), '15BRP-X; 18BRP-X; 20BRP-X; 23BRP-X');
+});
+test('쪽 표기: 앞에 그림 조각 글자가 붙은 「;   1-19」도 읽음, 본문 속 문장은 아님', () => {
+  assert.equal(M.pageLabel('본문\n;   1-19\n15BCS9UOM63'), '1-19');
+  assert.equal(M.pageLabel('본문\n※ 1-19 참조'), '');
+});
+test('목차: 끼워 넣은 쪽 「7-23-1」을 끝의 「23-1」로 자르지 않음', () => {
+  const pages = [
+    { n: 1, text: 'CONTENTS\n  18. Battery cleaning ------------- 7-23\n  19. Lithium-ion battery---------- 7-23-1\n  20. Storage --------------------- 7-24' },
+    { n: 2, text: 'BATTERY CLEANING\n7-23' }, { n: 3, text: 'LITHIUM-ION BATTERY\n7-23-1' }, { n: 4, text: 'STORAGE\n7-24' }
+  ];
+  const ix = M.makeIndex({ file: 'X_OM.pdf' }, pages);
+  assert.deepEqual(ix.toc.entries.map(e => [e.label, e.page]), [['7-23', 2], ['7-23-1', 3], ['7-24', 4]]);
+});
+test('목차와 본문이 한 쪽 어긋난 매뉴얼: 제목이 있는 가까운 쪽으로 옮김, 못 찾으면 그대로', () => {
+  const pages = [
+    { n: 1, text: 'CONTENTS\n  3. Instruments and controls ----- 3-5\n  6. Battery connector ------------ 3-18\n  8. Adjustable armrest ----------- 3-20\n  9. Mystery item ----------------- 3-6' },
+    { n: 2, text: '3. INSTRUMENTS AND CONTROLS\n3-4' }, { n: 3, text: 'panel\n3-5' }, { n: 4, text: 'other\n3-6' },
+    { n: 5, text: '6. BATTERY CONNECTOR\n3-18' }, { n: 6, text: '8. ADJUSTABLE ARMREST\n3-19' }
+  ];
+  const ix = M.makeIndex({ file: 'X_OM.pdf' }, pages);
+  assert.deepEqual(ix.toc.entries.map(e => [e.title, e.page, !!e.moved]), [
+    ['3. Instruments and controls', 2, true], // 목차 3-5(3쪽) → 제목이 있는 3-4(2쪽)
+    ['6. Battery connector', 5, false],       // 맞는 쪽은 그대로
+    ['8. Adjustable armrest', 6, true],       // 본문에 없는 3-20 → 앞 쪽 표기 3-19 에서 제목 확인
+    ['9. Mystery item', 4, false]]);          // 제목을 못 찾으면 옮기지 않음
+});
+test('어긋난 목차 옮기기는 대문자 제목 줄만 — 본문 문장 속 낱말에는 끌려가지 않음', () => {
+  const pages = [
+    { n: 1, text: 'CONTENTS\n  14. Battery maintenance --------- 7-18\n  15. Battery handling ------------ 7-19\n  16. Battery charging ------------ 7-20' },
+    { n: 2, text: '14. BATTERY MAINTENANCE\n7-18' },
+    { n: 3, text: '15. BATTERY HANDLING\nBattery charging installations must be located in areas designated\n7-19' },
+    { n: 4, text: 'more handling notes\n7-20' }, { n: 5, text: '16. BATTERY CHARGING\n7-21' }
+  ];
+  const ix = M.makeIndex({ file: 'X_OM.pdf' }, pages);
+  // 목차 7-20(4쪽)에 제목 없음 → 앞 쪽(3)의 본문 문장이 아니라 뒤 쪽(5)의 제목 줄로
+  assert.deepEqual(ix.toc.entries.map(e => [e.label, e.page]), [['7-18', 2], ['7-19', 3], ['7-20', 5]]);
+});
+test('새 대응표 15개 모델(B-9·B-9U·BCS-9·BCS-9U) → 해당 매뉴얼, BCS-9 와 BCS-9U 는 섞이지 않음', () => {
+  const sources = Sample.build(NOW).sources;
+  const mk = f => M.makeIndex({ file: f }, pagesFixture);
+  const ixs = ['2225303235B-9_OM.pdf', '2225303235B-9_SM.pdf', '25303235B-9U_OM.pdf', '25303235B-9U_SM.pdf',
+    '151820BCS-9_OM.pdf', '151820BCS-9_SM.pdf', '151820BCS-9U OM ENG.pdf', '151820BCS-9U SM ENG.pdf', 'BRP-9_SM.pdf'].map(mk);
+  const files = m => M.pickManuals(ixs, m, sources).list.map(x => x.file);
+  assert.deepEqual(files('32B-9'), ['2225303235B-9_OM.pdf', '2225303235B-9_SM.pdf']);
+  assert.deepEqual(files('32b-9u'), ['25303235B-9U_OM.pdf', '25303235B-9U_SM.pdf']);
+  assert.deepEqual(files('18BCS-9'), ['151820BCS-9_OM.pdf', '151820BCS-9_SM.pdf']);
+  assert.deepEqual(files('18BCS-9U'), ['151820BCS-9U OM ENG.pdf', '151820BCS-9U SM ENG.pdf']);
+  assert.equal(M.pickManuals(ixs, '22B-9', sources).match, 'source');
+  // 대응표가 없어도 파일 이름으로 적용 모델을 알아냄
+  assert.equal(M.pickManuals(ixs, '22B-9', []).match, 'exact');
+  assert.equal(sources.filter(s => /B-9U?$|BCS-9U?$/.test(s.model) && !/BRP/.test(s.model)).length, 15);
+});
+
 console.log('예시 데이터');
 test('예시 데이터 자체 정합성: 코드값·ref_no 형식·참조·소스 모델', () => {
   const db = Sample.build(NOW);
