@@ -719,7 +719,7 @@
       picked.textContent = chosen.length ? t('ground_picked', { list: chosen.map(function (c) { return M.refLabel(c.index, c.n); }).join(', ') }) : '';
     }
     function run() {
-      var r = M.search(manuals, qInput.value, { model: m.model, limit: 8 });
+      var r = M.search(manuals, qInput.value, { model: m.model, sources: db.sources, limit: 8 });
       list.textContent = '';
       info.textContent = r.terms.length ? t('ground_match_' + r.match, { model: m.model || '-' }) + ' ' + t('manual_found', { n: r.total }) : t('manual_need_words');
       r.results.forEach(function (x) {
@@ -886,6 +886,9 @@
       var models = h('input', { value: ix.models || '', 'aria-label': t('manual_models') + ' — ' + ix.file });
       models.addEventListener('change', function () { ix.models = models.value.trim(); saveManual(ix); toast(t('manual_models_saved')); });
       var toc = (ix.toc && ix.toc.entries) || [];
+      // 소스 등록(모델 ↔ 매뉴얼 대응표)에서 이 파일에 연결된 모델
+      var linked = db.sources.filter(function (sv) { return M.manualsBySource([ix], db.sources, sv.model).length; })
+        .map(function (sv) { return sv.model; });
       return h('div', { class: 'manual-item' },
         h('div', { class: 'manual-head' },
           h('strong', null, ix.title), h('span', { class: 'sub' }, (ix.kind ? ix.kind + ' · ' : '') + ix.pages.length + t('page_unit') + ' · ' + t('manual_toc_count', { n: toc.length })),
@@ -894,6 +897,7 @@
               { label: t('btn_close'), value: 'close' },
               { label: t('manual_remove'), primary: true, onClick: function () { manuals = manuals.filter(function (x) { return x !== ix; }); MS.remove(ix.file); render(); } }]);
           } }, t('manual_remove'))),
+        h('p', { class: linked.length ? 'note' : 'alert warn' }, linked.length ? t('manual_linked', { list: linked.join(', ') }) : t('manual_not_linked')),
         h('label', { class: 'field' }, h('span', null, t('manual_models')), models, h('small', { class: 'note' }, t('manual_models_note'))),
         toc.length ? h('details', { class: 'toc' }, h('summary', null, t('manual_toc')),
           h('ul', null, toc.map(function (e) {
@@ -911,7 +915,7 @@
     function run() {
       manualQuery = q.value; manualModel = mdl.value;
       out.textContent = '';
-      var r = M.search(manuals, q.value, { model: mdl.value.trim(), limit: 20 });
+      var r = M.search(manuals, q.value, { model: mdl.value.trim(), sources: db.sources, limit: 20 });
       if (!r.terms.length) { out.appendChild(h('p', { class: 'note' }, t('manual_need_words'))); return; }
       out.appendChild(h('p', { class: 'note' }, (mdl.value.trim() ? t('ground_match_' + r.match, { model: mdl.value.trim() }) + ' ' : '') + t('manual_found', { n: r.total })));
       out.appendChild(h('ul', { class: 'result-list' }, r.results.map(function (x) {
@@ -1049,7 +1053,32 @@
               { label: t('src_delete'), primary: true, onClick: function () { db.sources.splice(i, 1); save(); render(); } }]);
           } }, t('src_delete'))));
       })))) : h('p', { class: 'note' }, t('src_empty'));
+    // 모델 ↔ 매뉴얼 대응표 엑셀(Manual Medel Name.xlsx 형식: model · notebook_name · 파일명) 한꺼번에 등록 — 2026-09-29 오후
+    var mapInput = h('input', { type: 'file', accept: '.xlsx,.xls,.csv' });
+    mapInput.addEventListener('change', function () {
+      var f = mapInput.files[0];
+      if (!f) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        try {
+          var wb = XLSX.read(new Uint8Array(reader.result), { type: 'array' });
+          var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: '' });
+          var r = M.sourcesFromRows(rows);
+          if (r.problem) { toast(t('src_map_' + r.problem), true); return; }
+          var added = 0, updated = 0, cur = db;
+          r.rows.forEach(function (row) {
+            var u = L.upsertSource(cur, row);
+            if (u.ok) { cur = u.db; if (u.updated) updated++; else added++; }
+          });
+          save(cur);
+          afterRender = { title: t('src_map_title'), body: t('src_map_done', { added: added, updated: updated }) };
+          render();
+        } catch (err) { toast(String(err && err.message || err), true); }
+      };
+      reader.readAsArrayBuffer(f);
+    });
     main.appendChild(h('div', { class: 'page-head' }, h('h1', null, t('src_title'))));
+    main.appendChild(h('div', { class: 'card' }, h('h2', null, t('src_map_title')), h('p', { class: 'note' }, t('src_map_note')), mapInput));
     main.appendChild(form);
     main.appendChild(h('h2', null, t('src_list')));
     main.appendChild(list);

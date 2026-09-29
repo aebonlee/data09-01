@@ -143,6 +143,10 @@
       mail_no_admin: '(이메일이 등록된 승인 관리자가 없습니다)', mail_routed: '요청자 지역 「{territory}」 담당 관리자에게 보냅니다.',
       mail_fallback: '요청자 지역 「{territory}」을(를) 맡은 관리자가 없어 관리자 전원에게 보냅니다. 「회원 관리」에서 관리 지역을 정해 주세요.',
       mail_mark_sent: '보냄으로 표시', mail_marked: '보냄으로 표시했습니다.',
+      ground_match_source: '소스 등록 대응표에서 모델 {model} 에 연결된 매뉴얼에서 찾았습니다.',
+      manual_linked: '소스 등록 대응표 연결 모델: {list}', manual_not_linked: '소스 등록 대응표에 이 파일이 연결된 모델이 없습니다. 「소스 등록」에서 대응표를 불러오거나 파일명을 적어 주세요(그 전까지는 아래 적용 모델로 찾습니다).',
+      src_map_title: '모델 ↔ 매뉴얼 대응표 불러오기', src_map_note: 'model · notebook_name · 파일명 열이 있는 엑셀(예: Manual Medel Name.xlsx)을 고르면 모델마다 소스로 등록합니다. 파일명은 쉼표로 여러 개 적을 수 있고 .pdf 는 빼도 됩니다. 매뉴얼 검색은 이 대응표로 접수 모델의 매뉴얼을 먼저 고릅니다.',
+      src_map_done: '새로 {added}개, 갱신 {updated}개를 등록했습니다.', src_map_no_header: '머리행에 model 열이 없습니다.', src_map_no_rows: '등록할 모델 행이 없습니다.',
       footer_address: '경기도 성남시 분당구 분당수서로 477 HD현대글로벌R&D센터(GRC) 13층 (13553)',
       footer_phone: '대표전화 : 02-479-7142   고객 상담 및 제품 문의 : 1899-7282', footer_biz: '사업자등록번호 : 493-81-02117'
     },
@@ -285,6 +289,10 @@
       mail_no_admin: '(no approved administrator with an e-mail)', mail_routed: 'Sent to the administrator of territory "{territory}".',
       mail_fallback: 'No administrator manages territory "{territory}", so all administrators receive it. Set territories under Members.',
       mail_mark_sent: 'Mark as sent', mail_marked: 'Marked as sent.',
+      ground_match_source: 'Searched the manuals linked to model {model} in the resource table.',
+      manual_linked: 'Linked models (resource table): {list}', manual_not_linked: 'No model in the resource table links to this file. Import the table in Add Resource (until then the models below are used).',
+      src_map_title: 'Import model ↔ manual table', src_map_note: 'Choose an Excel file with model · notebook_name · 파일명 columns (e.g. Manual Medel Name.xlsx). Each model is registered as a resource; file names may be comma-separated, with or without .pdf. Manual search uses this table to pick the manuals for the request model first.',
+      src_map_done: '{added} added, {updated} updated.', src_map_no_header: 'No model column in the header row.', src_map_no_rows: 'No model rows to import.',
       footer_address: '경기도 성남시 분당구 분당수서로 477 HD현대글로벌R&D센터(GRC) 13층 (13553)',
       footer_phone: 'Tel : 02-479-7142   Customer service & product inquiries : 1899-7282', footer_biz: 'Business Registration No. : 493-81-02117'
     }

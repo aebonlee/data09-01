@@ -591,8 +591,83 @@ test('JSON 색인 읽기: 형식 검사, 저장용 사본 → 다시 읽으면 �
 });
 test('PDF 텍스트 조각 → 줄: 위→아래·왼→오, 겹쳐 찍은 같은 조각 하나로', () => {
   const it = (s, x, y, w) => ({ str: s, transform: [10, 0, 0, 10, x, y], width: w });
-  const text = M.itemsToText([it('world', 60, 700, 30), it('Hello', 10, 700, 30), it('Hello', 10.2, 700, 30), it('Line2', 10, 680, 30), it('7-3', 300, 40, 12)]);
-  assert.equal(text, 'Hello world\nLine2\n7-3');
+  const text = M.itemsToText([it('world', 45, 700, 30), it('Hello', 10, 700, 30), it('Hello', 10.2, 700, 30), it('Line2', 10, 680, 30), it('7-3', 300, 40, 12)]);
+  // 줄 앞 들여쓰기는 공백으로 남습니다(목차 큰 제목·항목 구분용). 글자 크기 10 → 5 단위당 공백 하나
+  assert.equal(text, 'Hello world\nLine2\n' + ' '.repeat(58) + '7-3');
+  assert.equal(M.itemsToText([it('SECTION 1', 10, 700, 50), it('Group 1', 30, 680, 40)]), 'SECTION 1\n    Group 1');
+});
+
+console.log('추가 매뉴얼 형식·모델 대응표 (2026-09-29 오후)');
+test('쪽 표기: 맨 아래 「30 / 210」·「26」 형식도 읽고, 본문 속 숫자 줄은 맨 아래 두 줄만', () => {
+  assert.equal(M.pageLabel('본문\n30 / 210'), '30');
+  assert.equal(M.pageLabel('본문\n26'), '26');
+  assert.equal(M.pageLabel('12\n본문 줄\n본문 끝 줄\nmore'), '');
+  assert.equal(M.pageLabel('x\n7-3\n45'), '7-3'); // 6-17 형식이 먼저
+});
+const deSm = [
+  { n: 1, text: '                CONTENTS\nFOREWORD ................................. 2\nSECTION 1    GENERAL ............................ 3\n    GROUP1       SAFETY HINTS ................... 3\n    GROUP2       SPECIFICATIONS ................. 4\nSECTION2     BRAKE SYSTEM ....................... 5\n    GROUP1       STRUCTURE AND FUNCTION ......... 5\n                1 / 6' },
+  { n: 2, text: 'FOREWORD\n2 / 6' }, { n: 3, text: 'SAFETY HINTS\n3 / 6' }, { n: 4, text: 'SPECIFICATIONS\n4 / 6' },
+  { n: 5, text: 'BRAKE STRUCTURE AND FUNCTION\n5 / 6' }, { n: 6, text: 'end\n6 / 6' }
+];
+test('붙여 쓴 SECTION2·GROUP1 + 숫자 쪽 표기(DE-7·LE-7 정비 매뉴얼)', () => {
+  const ix = M.makeIndex({ file: '253035DE-7 SM.pdf' }, deSm);
+  assert.deepEqual(ix.toc.entries.map(e => [e.level, e.title, e.page]), [
+    [1, 'FOREWORD', 2], [1, 'SECTION 1 GENERAL', 3], [2, 'GROUP1 SAFETY HINTS', 3], [2, 'GROUP2 SPECIFICATIONS', 4],
+    [1, 'SECTION2 BRAKE SYSTEM', 5], [2, 'GROUP1 STRUCTURE AND FUNCTION', 5]]);
+  assert.equal(ix.models, '25DE-7; 30DE-7; 35DE-7');
+});
+test('모든 줄에 쪽 표기가 있는 목차(DE-7 운전자 매뉴얼): 들여쓰기로 큰 제목, 인쇄 쪽 → PDF 쪽(앞쪽 표기에서 이어 셈)', () => {
+  const pages = [
+    { n: 1, text: 'CONTENTS\nINTRODUCTION ........................ 1\nSAFETY LABELS ....................... 2\n    1. LOCATION ..................... 2\n    2. DESCRIPTION .................. 4\n1.SAFETY HINTS ...................... 5' },
+    { n: 2, text: 'intro\n1' }, { n: 3, text: 'labels\n2' }, { n: 4, text: 'no number page' }, { n: 5, text: 'DESCRIPTION\n4' }, { n: 6, text: 'HINTS\n5' }
+  ];
+  const ix = M.makeIndex({ file: '253035DE-7 OM.pdf' }, pages);
+  assert.deepEqual(ix.toc.entries.map(e => [e.level, e.title, e.page]), [
+    [1, 'INTRODUCTION', 2], [1, 'SAFETY LABELS', 3], [2, '1. LOCATION', 3], [2, '2. DESCRIPTION', 5], [1, '1.SAFETY HINTS', 6]]);
+  // 쪽 표기가 없는 쪽(4)을 가리키는 항목: 앞쪽 표기(2 → 3쪽)에서 이어 셈
+  const ix2 = M.makeIndex({ file: 'X.pdf' }, [{ n: 1, text: 'CONTENTS\nA ........ 1\nB ........ 2\nC ........ 3' }, { n: 2, text: 'a\n1' }, { n: 3, text: 'b\n2' }, { n: 4, text: 'c no label' }]);
+  assert.equal(ix2.toc.entries[2].page, 4);
+});
+test('두 단 목차(100D-9V 운전자 매뉴얼): 왼쪽 단을 다 읽고 오른쪽 단, 번호뿐인 조각은 붙임', () => {
+  const pages = [
+    { n: 1, text: 'A message ------ 0-1                          3. KNOW YOUR TRUCK\nIntro ----------------- 0-2      1. General locations ---------- 3-1\n1. SAFETY HINTS                                7. Air conditioner ------------ 3-2\n  1. Daily inspection ---------- 1-1    2. Name plate ---------- 3-3' },
+    { n: 2, text: 'a\n0-1' }, { n: 3, text: 'b\n0-2' }, { n: 4, text: 'c\n1-1' }, { n: 5, text: 'd\n3-1' }, { n: 6, text: 'e\n3-2' }, { n: 7, text: 'f\n3-3' }
+  ];
+  const ix = M.makeIndex({ file: '100D-9V OM EXP.pdf' }, pages);
+  assert.deepEqual(ix.toc.entries.map(e => [e.level, e.title, e.label]), [
+    [2, 'A message', '0-1'], [2, 'Intro', '0-2'], [1, '1. SAFETY HINTS', ''], [2, '1. Daily inspection', '1-1'],
+    [1, '3. KNOW YOUR TRUCK', ''], [2, '1. General locations', '3-1'], [2, '7. Air conditioner', '3-2'], [2, '2. Name plate', '3-3']]);
+  assert.equal(ix.models, '100D-9V');
+});
+test('PDF 텍스트: 넓은 빈칸(단 사이)은 빈칸 수로, 빈칸 조각이 끝 위치를 늘리지 않음, NUL 은 빈칸', () => {
+  const it = (s, x, y, w) => ({ str: s, transform: [11, 0, 0, 11, x, y], width: w });
+  const line = M.itemsToText([it('0-2', 270.2, 720, 14.1), it(' ', 284.3, 720, 27), it('1. General', 311.7, 720, 50)]);
+  assert.ok(/0-2 {4,}1\. General/.test(line), JSON.stringify(line));
+  assert.equal(M.itemsToText([it('A\u0000MESSAGE', 10, 700, 50)]), 'A MESSAGE');
+});
+const table = [['model', 'notebook_name', '파일명'],
+  ['15BRP-9', '15/18/20/23BRP-9', 'BRP-9_OM.pdf, BRP-9_SM'],
+  ['25DE-7', '25/30/35DE-7', '253035DE-7 OM, 253035DE-7 SM'],
+  ['', '', ''], ['100D-9V', '100D-9V', '100D-9V OM EXP.pdf, 100D-9V SM ENG']];
+test('모델 대응표(Manual Medel Name.xlsx 형식) → 소스 등록 행: 쉼표 구분 파일명을 ; 로', () => {
+  const r = M.sourcesFromRows(table);
+  assert.equal(r.problem, '');
+  assert.deepEqual(r.rows[0], { model: '15BRP-9', notebook_name: '15/18/20/23BRP-9', files: 'BRP-9_OM.pdf; BRP-9_SM' });
+  assert.equal(r.rows.length, 3);
+  assert.equal(M.sourcesFromRows([['a', 'b']]).problem, 'no_header');
+});
+test('접수 모델 → 소스 등록 대응표의 매뉴얼을 먼저(.pdf 유무·대소문자 무시), 없으면 기존 순서', () => {
+  const sources = M.sourcesFromRows(table).rows;
+  const mk = f => M.makeIndex({ file: f }, pagesFixture);
+  const ixs = ['BRP-9_OM.pdf', 'BRP-9_SM.pdf', '253035DE-7 OM.pdf', '253035DE-7 SM.pdf', '100D-9V SM ENG.pdf', '15BRP-X SM_EXP.pdf'].map(mk);
+  const p = M.pickManuals(ixs, '15brp-9', sources);
+  assert.equal(p.match, 'source');
+  assert.deepEqual(p.list.map(x => x.file), ['BRP-9_OM.pdf', 'BRP-9_SM.pdf']);
+  assert.deepEqual(M.pickManuals(ixs, '25DE-7', sources).list.map(x => x.file), ['253035DE-7 OM.pdf', '253035DE-7 SM.pdf']);
+  assert.deepEqual(M.pickManuals(ixs, '100D-9V', sources).list.map(x => x.file), ['100D-9V SM ENG.pdf']); // OM 은 안 불러옴
+  // 대응표에 없는 모델은 기존 규칙(적용 모델 → 같은 계열)
+  assert.equal(M.pickManuals(ixs, '18BRP-X', sources).match, 'family');
+  assert.equal(M.search(ixs, 'stepper', { model: '25DE-7', sources }).match, 'source');
 });
 
 console.log('예시 데이터');

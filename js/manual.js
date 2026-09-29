@@ -15,6 +15,9 @@
   var FORMAT = 'data09-01.manual-index';
   // 인쇄된 쪽 표기: 0-1, 6-17, 8-4-1(추가 페이지), A-1(부록)
   var LABEL_RE = /^(?:\d{1,2}|[A-Z])-\d{1,3}(?:-\d{1,2})?$/;
+  // 2026-09-29 추가 매뉴얼(25/30/35 DE-7·LE-7)은 쪽 표기가 '30 / 210'(PDF 쪽/전체) 또는 그냥 '26' 입니다
+  var LABEL_OF_RE = /^(\d{1,4})\s*\/\s*\d{1,4}$/;
+  var LABEL_NUM_RE = /^\d{1,4}$/;
 
   // ── PDF 텍스트 조각 → 줄 텍스트 ───────────────────────────────────
   // pdf.js getTextContent() 의 items: [{ str, transform:[a,b,c,d,x,y], width }]
@@ -30,31 +33,45 @@
         if (Math.abs(rows[i].y - y) <= Math.max(2, h * 0.3)) { row = rows[i]; break; }
       }
       if (!row) { row = { y: y, parts: [] }; rows.push(row); }
-      row.parts.push({ x: x, w: it.width || 0, s: it.str, h: h });
+      // 일부 PDF(LE-7 운전자 매뉴얼)는 빈칸을 NUL 문자로 넣어 둡니다
+      row.parts.push({ x: x, w: it.width || 0, s: it.str.replace(/\u0000/g, ' '), h: h });
     });
     rows.sort(function (a, b) { return b.y - a.y; });
+    // 줄 앞 들여쓰기를 공백으로 남깁니다 — 목차에서 큰 제목(들여쓰기 없음)과 항목을 가르는 데 씁니다
+    var minX = Infinity;
+    rows.forEach(function (r) { r.parts.forEach(function (p) { if (p.s.trim() && p.x < minX) minX = p.x; }); });
     return rows.map(function (r) {
       r.parts.sort(function (a, b) { return a.x - b.x; });
-      var line = '', end = null;
+      var firstP = r.parts.filter(function (p) { return p.s.trim(); })[0] || r.parts[0];
+      var indent = isFinite(minX) ? Math.min(200, Math.max(0, Math.round((firstP.x - minX) / (firstP.h * 0.5)))) : 0;
+      var line = new Array(indent + 1).join(' '), end = null;
       var prev = null;
       r.parts.forEach(function (p) {
         // 굵게 보이려고 같은 글자를 겹쳐 두 번 찍은 PDF 가 있어(BRP-9 SM 제목) 겹친 같은 조각은 건너뜁니다
         if (prev && p.s === prev.s && Math.abs(p.x - prev.x) < Math.max(1, p.h * 0.5)) return;
         prev = p;
-        if (end != null && p.x - end > p.h * 0.2 && !/\s$/.test(line) && !/^\s/.test(p.s)) line += ' ';
+        // 넓은 빈칸(두 단 목차의 단 사이 등)은 빈칸 수로 남기고, 보통 낱말 사이는 한 칸
+        if (end != null && p.x - end > p.h * 1.8) line += new Array(Math.min(200, Math.round((p.x - end) / (p.h * 0.5))) + 1).join(' ');
+        else if (end != null && p.x - end > p.h * 0.2 && !/\s$/.test(line) && !/^\s/.test(p.s)) line += ' ';
         line += p.s;
-        end = p.x + p.w;
+        // 빈칸만 있는 조각은 폭이 단 사이 빈칸 전체를 덮기도 해서, 끝 위치를 옮기지 않습니다(두 단 목차)
+        if (p.s.trim()) end = p.x + p.w;
+        else if (end == null) end = p.x;
       });
       return line.replace(/\s+$/, '');
     }).filter(function (l) { return l.trim() !== ''; }).join('\n');
   }
+  function isPageMark(s) { return LABEL_RE.test(s) || LABEL_OF_RE.test(s) || LABEL_NUM_RE.test(s); }
 
   // 페이지 텍스트에서 인쇄된 쪽 표기를 찾습니다(따로 떨어진 줄 중 마지막 것)
+  // '6-17' 형식을 먼저 찾고, 없으면 맨 아래 두 줄에서 '30 / 210'(→ 30)·'26' 형식을 봅니다
   function pageLabel(text) {
-    var lines = String(text || '').split('\n');
-    for (var i = lines.length - 1; i >= 0; i--) {
-      var s = lines[i].trim();
-      if (LABEL_RE.test(s)) return s;
+    var lines = String(text || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    for (var i = lines.length - 1; i >= 0; i--) if (LABEL_RE.test(lines[i])) return lines[i];
+    for (var j = lines.length - 1; j >= Math.max(0, lines.length - 2); j--) {
+      var m = lines[j].match(LABEL_OF_RE);
+      if (m) return String(Number(m[1]));
+      if (LABEL_NUM_RE.test(lines[j])) return String(Number(lines[j]));
     }
     return '';
   }
@@ -62,20 +79,42 @@
   // ── 목차 (CONTENTS 쪽의 SECTION·Group 또는 1. 2. 항목) ──────────────
   // 쪽 표기로 끝나는 줄(점선·대시 리더 포함)을 항목으로, 쪽 표기가 없는 굵은 제목 줄을 큰 제목으로 봅니다.
   // 정규식을 잘게 나눈 이유: 점선 리더를 한 식으로 잡으면(중첩 반복) 리더가 긴 줄에서 역추적이 폭발합니다.
-  var TOC_LABEL_END = /\s*((?:\d{1,2}|[A-Z])-\d{1,3})$/;
+  // 쪽 표기는 '6-17' 또는 숫자만('121'). 숫자만인 것은 점선 리더가 있을 때만 목차 항목으로 봅니다(본문 숫자 오인 방지)
+  var TOC_LABEL_END = /\s*((?:\d{1,2}|[A-Z])-\d{1,3}|\d{1,4})$/;
   var TOC_LEADER = /[.\-·–—]\s?[.\-·–—]\s?[.\-·–—]/;
-  var TOC_NUMBERED = /^(?:Group\s+\d+|\d{1,2}\.)\s+\S/;
+  var TOC_NUMBERED = /^(?:Group\s*\d+|\d{1,2}\.)\s*\S/i;
   function tocEntry(s) {
     var m = s.match(TOC_LABEL_END);
     if (!m) return null;
     var head = s.slice(0, m.index);
     if (!/[A-Za-z]/.test(head)) return null;
-    if (!TOC_LEADER.test(head) && !TOC_NUMBERED.test(head)) return null;
+    var leader = TOC_LEADER.test(head);
+    if (!leader && (!TOC_NUMBERED.test(head) || LABEL_NUM_RE.test(m[1]))) return null;
     return [s, head, m[1]];
   }
-  var TOC_HEAD = /^(?:SECTION\s+\d+\s+\S.*|\d{1,2}\.\s+[A-Z][A-Z0-9 &\/,'()-]{2,}|FOREWORDS?|APPENDIX.*|INDEX)$/;
+  // SECTION2·GROUP1 처럼 붙여 쓴 표기도 받습니다(DE-7·LE-7 정비 매뉴얼)
+  var TOC_HEAD = /^(?:SECTION\s*\d+\s*\S.*|\d{1,2}\.\s+[A-Z][A-Z0-9 &\/,'()-]{2,}|FOREWORDS?|APPENDIX.*|INDEX)$/;
+  var TOC_TOP = /^(?:SECTION\s*\d|APPENDIX|FOREWORD)/i;
   function cleanTitle(s) {
     return String(s).replace(/[\s.\-·–—]+$/, '').replace(/\s{2,}/g, ' ').trim();
+  }
+  // 한 줄 → 단 조각 [{ text, col(시작 칸) }]. 넓은 빈칸(5칸 이상, 쪽 표기 뒤면 3칸 이상)에서 자르되, 'GROUP1   SAFETY HINTS' 처럼
+  // 왼쪽이 번호뿐이거나 오른쪽이 리더·쪽 표기뿐이면 한 조각으로 둡니다.
+  var BARE_NUM = /^(?:GROUP\s*\d+|SECTION\s*\d+|\d{1,2}\.?)$/i;
+  var ONLY_LABEL = /^[.\-·–—\s]*(?:(?:\d{1,2}|[A-Z])-\d{1,3}|\d{1,4})$/;
+  function tocSegments(raw) {
+    var segs = [], re = /\S+(?: {1,2}\S+)*/g, m;
+    while ((m = re.exec(String(raw || '')))) segs.push({ text: m[0], col: m.index });
+    for (var i = segs.length - 1; i > 0; i--) {
+      var gap = segs[i].col - (segs[i - 1].col + segs[i - 1].text.length);
+      // 3~4칸 빈칸은 왼쪽 조각이 쪽 표기로 끝날 때만 단 경계로 봅니다('15. Step --- 1-17    5. Starting …')
+      var narrow = gap < 5 && !TOC_LABEL_END.test(segs[i - 1].text);
+      if (narrow || BARE_NUM.test(segs[i - 1].text) || ONLY_LABEL.test(segs[i].text)) {
+        segs[i - 1].text += ' ' + segs[i].text;
+        segs.splice(i, 1);
+      }
+    }
+    return segs;
   }
   function buildToc(pages, maxScan) {
     var entries = [], tocPages = [];
@@ -85,19 +124,43 @@
       var found = 0;
       var lines = String(p.text || '').split('\n');
       var local = [];
-      lines.forEach(function (raw) {
-        var s = raw.replace(/\s+/g, ' ').trim();
-        if (!s || LABEL_RE.test(s) || /^CONTENTS$/i.test(s)) return;
-        var m = tocEntry(s);
-        if (m) {
-          var title = cleanTitle(m[1]);
-          if (TOC_HEAD.test(title) && /^(?:SECTION|APPENDIX)/.test(title)) local.push({ level: 1, title: title, label: m[2] });
-          else local.push({ level: 2, title: title, label: m[2] });
-          found++;
-          return;
-        }
-        if (TOC_HEAD.test(s)) local.push({ level: 1, title: cleanTitle(s), label: '' });
+      // 두 단 목차(100D-9V 운전자 매뉴얼): 한 줄에 왼쪽 단 항목과 오른쪽 단 항목이 넓은 빈칸(5칸 이상)을 두고 붙어 있습니다.
+      // 줄을 단 조각으로 나눠 왼쪽 단을 다 읽은 뒤 오른쪽 단을 읽습니다.
+      var segsByLine = lines.map(tocSegments);
+      var rightStart = Infinity;
+      segsByLine.forEach(function (segs) { if (segs.length > 1) rightStart = Math.min(rightStart, segs[1].col); });
+      var cols = [[], []];
+      segsByLine.forEach(function (segs) {
+        segs.forEach(function (sg) {
+          var right = isFinite(rightStart) && sg.col >= rightStart - 3;
+          cols[right ? 1 : 0].push({ text: sg.text, indent: right ? sg.col - rightStart : sg.col });
+        });
       });
+      cols.forEach(function (list) {
+        list.forEach(function (sg) {
+          var s = sg.text.replace(/\s+/g, ' ').trim();
+          if (!s || isPageMark(s) || /^CONTENTS$/i.test(s)) return;
+          var m = tocEntry(s);
+          if (m) {
+            local.push({ level: 2, title: cleanTitle(m[1]), label: m[2], indent: sg.indent, col: list });
+            found++;
+            return;
+          }
+          if (TOC_HEAD.test(s)) local.push({ level: 1, title: cleanTitle(s), label: '', indent: sg.indent, col: list });
+        });
+      });
+      // 큰 제목 가르기: SECTION·APPENDIX·FOREWORD 는 큰 제목. 쪽 표기 없는 제목 줄이나 SECTION 이 있는 쪽이면
+      // 나머지는 항목. 둘 다 없는 쪽(DE-7·LE-7 운전자 매뉴얼처럼 모든 줄에 쪽 표기)은 단마다 들여쓰기가 가장 얕은 줄이 큰 제목
+      var hasHead = local.some(function (e) { return !e.label || TOC_TOP.test(e.title); });
+      cols.forEach(function (list) {
+        var labeled = local.filter(function (e) { return e.label && e.col === list; });
+        var minIndent = labeled.reduce(function (a, e) { return Math.min(a, e.indent); }, Infinity);
+        labeled.forEach(function (e) {
+          if (TOC_TOP.test(e.title)) e.level = 1;
+          else if (!hasHead && e.indent <= minIndent + 1) e.level = 1;
+        });
+      });
+      local.forEach(function (e) { delete e.indent; delete e.col; });
       // 목차 쪽은 쪽 표기로 끝나는 항목이 여러 개 있는 쪽입니다
       if (found >= 3) { started = true; tocPages.push(p.n); entries = entries.concat(local); }
       else if (started) started = false;
@@ -109,7 +172,17 @@
       var l = p.label || pageLabel(p.text);
       if (l && map[l] == null) map[l] = p.n;
     });
-    entries.forEach(function (e) { e.page = e.label && map[e.label] != null ? map[e.label] : null; });
+    // 숫자만인 쪽 표기가 그 쪽에 찍혀 있지 않으면(장 표지 등) 가장 가까운 앞 쪽 표기에서 쪽 수를 더해 찾습니다
+    var nums = Object.keys(map).filter(function (k) { return LABEL_NUM_RE.test(k); }).map(Number).sort(function (a, b) { return a - b; });
+    var total = (pages || []).length;
+    entries.forEach(function (e) {
+      e.page = e.label && map[e.label] != null ? map[e.label] : null;
+      if (e.page == null && LABEL_NUM_RE.test(e.label) && nums.length) {
+        var t = Number(e.label), k = null;
+        nums.forEach(function (x) { if (x <= t) k = x; });
+        if (k != null && map[k] + (t - k) <= total) e.page = map[k] + (t - k);
+      }
+    });
     // 큰 제목의 쪽은 바로 아래 첫 항목의 쪽
     entries.forEach(function (e, i) {
       if (e.level === 1 && e.page == null) {
@@ -144,6 +217,8 @@
       var fam = m[2].toUpperCase();
       return m[1].match(/\d{2}/g).map(function (d) { return d + fam; }).join('; ');
     }
+    var big = base.match(/^(\d{2,3}[A-Z]{1,3}-[0-9A-Z]+)/i); // 100D-9V
+    if (big) return big[1].toUpperCase();
     var f = base.match(/([A-Z]{2,}[A-Z0-9]*-[A-Z0-9]+)/i);
     return f ? f[1].toUpperCase() : '';
   }
@@ -163,10 +238,25 @@
     if (fam && fam.length >= 3 && list.some(function (x) { return familyOf(x) === fam; })) return 'family';
     return '';
   }
-  // 검색 대상 매뉴얼: 적용 모델이 맞는 것 → 없으면 같은 계열 → 없으면 전부
-  function pickManuals(indexes, model) {
+  // 소스 등록(모델 ↔ 매뉴얼 파일명 대응표)에서 이 모델의 매뉴얼을 찾습니다.
+  // 대응표의 파일명은 '.pdf' 가 빠져 있기도 하고 ', ' 로 이어져 있어(Manual Medel Name.xlsx) 둘 다 받습니다.
+  function normFile(s) { return String(s || '').trim().replace(/\.pdf$/i, '').toUpperCase().replace(/[^A-Z0-9가-힣]/g, ''); }
+  function sourceFiles(sources, model) {
+    var k = normKey(model);
+    if (!k) return [];
+    var src = (sources || []).filter(function (x) { return normKey(x.model) === k; })[0];
+    return src ? String(src.files || '').split(/[;,\n]/).map(normFile).filter(Boolean) : [];
+  }
+  function manualsBySource(indexes, sources, model) {
+    var files = sourceFiles(sources, model);
+    return (indexes || []).filter(function (ix) { return files.indexOf(normFile(ix.file)) !== -1; });
+  }
+  // 검색 대상 매뉴얼: 소스 등록 대응표에 연결된 것 → 적용 모델이 맞는 것 → 같은 계열 → 전부
+  function pickManuals(indexes, model, sources) {
     indexes = indexes || [];
     if (!model) return { list: indexes, match: 'all' };
+    var bySrc = manualsBySource(indexes, sources, model);
+    if (bySrc.length) return { list: bySrc, match: 'source' };
     var ex = indexes.filter(function (x) { return modelMatch(x, model) === 'exact'; });
     if (ex.length) return { list: ex, match: 'exact' };
     var fa = indexes.filter(function (x) { return modelMatch(x, model) === 'family'; });
@@ -199,7 +289,7 @@
     opts = opts || {};
     var terms = tokenize(query);
     if (!terms.length) return { terms: [], results: [], match: 'all' };
-    var pick = pickManuals(indexes, opts.model);
+    var pick = pickManuals(indexes, opts.model, opts.sources);
     var pages = [];
     pick.list.forEach(function (ix) {
       var skip = (ix.toc && ix.toc.tocPages) || [];
@@ -348,9 +438,38 @@
     return { format: FORMAT, version: 1, file: ix.file, title: ix.title, kind: ix.kind, models: ix.models, created: ix.created, pages: ix.pages };
   }
 
+  // 모델 ↔ 매뉴얼 대응표(엑셀 행 배열) → 소스 등록 행. 머리행에서 model·notebook_name·파일명(files) 열을 찾습니다.
+  // 결과: { rows: [{ model, notebook_name, files }], problem }
+  function sourcesFromRows(rows) {
+    rows = rows || [];
+    var hi = -1, col = {};
+    for (var i = 0; i < Math.min(rows.length, 5); i++) {
+      var h = (rows[i] || []).map(function (c) { return String(c == null ? '' : c).trim().toLowerCase(); });
+      if (h.indexOf('model') !== -1) {
+        hi = i;
+        col.model = h.indexOf('model');
+        col.nb = h.indexOf('notebook_name');
+        col.files = h.indexOf('files') !== -1 ? h.indexOf('files') : h.indexOf('파일명');
+        break;
+      }
+    }
+    if (hi === -1) return { rows: [], problem: 'no_header' };
+    var out = [];
+    rows.slice(hi + 1).forEach(function (r) {
+      var model = String((r || [])[col.model] == null ? '' : r[col.model]).trim();
+      if (!model) return;
+      var nb = col.nb === -1 ? '' : String(r[col.nb] == null ? '' : r[col.nb]).trim();
+      var files = col.files === -1 ? '' : String(r[col.files] == null ? '' : r[col.files]).split(/[;,\n]/)
+        .map(function (x) { return x.trim(); }).filter(Boolean).join('; ');
+      out.push({ model: model, notebook_name: nb || model, files: files });
+    });
+    return { rows: out, problem: out.length ? '' : 'no_rows' };
+  }
+
   var api = {
     FORMAT: FORMAT, itemsToText: itemsToText, pageLabel: pageLabel, buildToc: buildToc, sectionOf: sectionOf,
     guessModels: guessModels, guessTitle: guessTitle, modelMatch: modelMatch, pickManuals: pickManuals,
+    normFile: normFile, sourceFiles: sourceFiles, manualsBySource: manualsBySource, sourcesFromRows: sourcesFromRows,
     tokenize: tokenize, search: search, snippet: snippet, keywordsFromRequest: keywordsFromRequest, GLOSSARY: GLOSSARY,
     refLabel: refLabel, excerpt: excerpt, groundingBlock: groundingBlock, findRef: findRef,
     makeIndex: makeIndex, readIndexJson: readIndexJson, toStorable: toStorable

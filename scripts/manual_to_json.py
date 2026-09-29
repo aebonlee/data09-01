@@ -45,6 +45,9 @@ def guess_models(file_name):
     if m:
         fam = m.group(2).upper()
         return '; '.join(d + fam for d in re.findall(r'\d{2}', m.group(1)))
+    big = re.match(r'^(\d{2,3}[A-Z]{1,3}-[0-9A-Z]+)', base, re.I)  # 100D-9V
+    if big:
+        return big.group(1).upper()
     f = re.search(r'([A-Z]{2,}[A-Z0-9]*-[A-Z0-9]+)', base, re.I)
     return f.group(1).upper() if f else ''
 
@@ -73,7 +76,8 @@ def extract(path):
 
 
 def clean(text):
-    lines = [re.sub(r'[ \t]+', ' ', l).rstrip() for l in text.replace('\r', '').split('\n')]
+    # 줄 앞 들여쓰기와 단 사이 넓은 빈칸은 남깁니다(목차 큰 제목·항목 구분, 두 단 목차). 탭만 빈칸으로
+    lines = [l.replace('\t', ' ').replace('\x00', ' ').rstrip() for l in text.replace('\r', '').split('\n')]
     return '\n'.join(l for l in lines if l.strip())
 
 

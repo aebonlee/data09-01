@@ -31,7 +31,24 @@
       sources: [
         { notebook_name: '30BRP-X 정비매뉴얼(예시)', model: '30BRP-X', files: '30BRP-X_Service_Manual_예시.pdf' },
         { notebook_name: 'DEMO-25D 정비매뉴얼(예시)', model: 'DEMO-25D', files: 'DEMO-25D_Service_Manual_예시.pdf' },
-        { notebook_name: 'DEMO-50E 정비매뉴얼(예시)', model: 'DEMO-50E', files: '' }
+        { notebook_name: 'DEMO-50E 정비매뉴얼(예시)', model: 'DEMO-50E', files: '' },
+        // 수강생 제출 「Manual Medel Name.xlsx」(2026-09-29) — 모델 ↔ 매뉴얼 파일 대응표. 제품 모델명·매뉴얼 파일명뿐이라 그대로 싣습니다.
+        // 매뉴얼 PDF 자체는 리포에 없습니다(사용자가 「매뉴얼 근거」에서 자기 PC 의 파일을 불러옴).
+        { notebook_name: '15/18/20/23BRP-9', model: '15BRP-9', files: 'BRP-9_OM.pdf; BRP-9_SM' },
+        { notebook_name: '15/18/20/23BRP-9', model: '18BRP-9', files: 'BRP-9_OM.pdf; BRP-9_SM' },
+        { notebook_name: '15/18/20/23BRP-9', model: '20BRP-9', files: 'BRP-9_OM.pdf; BRP-9_SM' },
+        { notebook_name: '15/18/20/23BRP-9', model: '23BRP-9', files: 'BRP-9_OM.pdf; BRP-9_SM' },
+        { notebook_name: '15/18/20/23BRP-X', model: '15BRP-X', files: '15BRP-X SM_EXP.pdf; 15182023BRP-X OM' },
+        { notebook_name: '15/18/20/23BRP-X', model: '18BRP-X', files: '15BRP-X SM_EXP.pdf; 15182023BRP-X OM' },
+        { notebook_name: '15/18/20/23BRP-X', model: '20BRP-X', files: '15BRP-X SM_EXP.pdf; 15182023BRP-X OM' },
+        { notebook_name: '15/18/20/23BRP-X', model: '23BRP-X', files: '15BRP-X SM_EXP.pdf; 15182023BRP-X OM' },
+        { notebook_name: '100D-9V', model: '100D-9V', files: '100D-9V OM EXP.pdf; 100D-9V SM ENG' },
+        { notebook_name: '25/30/35DE-7', model: '25DE-7', files: '253035DE-7 OM; 253035DE-7 SM' },
+        { notebook_name: '25/30/35DE-7', model: '30DE-7', files: '253035DE-7 OM; 253035DE-7 SM' },
+        { notebook_name: '25/30/35DE-7', model: '35DE-7', files: '253035DE-7 OM; 253035DE-7 SM' },
+        { notebook_name: '25/30/35LE-7', model: '25LE-7', files: '253035LE-7 OM; 253035LE-7 SM' },
+        { notebook_name: '25/30/35LE-7', model: '30LE-7', files: '253035LE-7 OM; 253035LE-7 SM' },
+        { notebook_name: '25/30/35LE-7', model: '35LE-7', files: '253035LE-7 OM; 253035LE-7 SM' }
       ],
       mains: [
         { ref_no: r1, status: 'Completed', reg_date: d20, reg_id: 'demo_user01', model: '30BRP-X', serial_no: 'UNFCFB18CF0000452', o_hour: 1234.5, type_cd: 'Troubleshooting', system_cat: 'Engine', action_content: '(예시) 스텝핑 모터 커넥터 접촉 불량 확인 — 커넥터 재체결 후 에러코드 219 해제, 조향 정상 확인.', complete_date: day(now, 19), complete_image: r1 + '_C1.jpg' },
