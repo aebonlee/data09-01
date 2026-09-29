@@ -22,11 +22,13 @@ declare v_n int;
 begin
   perform public._assert_eq(
     (select count(*)::int from pg_tables where schemaname = 'public'
-      and tablename in ('app_members','users','sources','mains','inquiries','replies','access_log')),
-    7, '표 7개가 한 번씩만 있다 (두 번 적용 후)');
+      and tablename in ('app_members','users','sources','mains','inquiries','replies','access_log','mails')),
+    8, '표 8개가 한 번씩만 있다 (두 번 적용 후)');
   select count(*) into v_n from pg_trigger t join pg_class c on c.oid = t.tgrelid
    where not t.tgisinternal and t.tgname like '%\_updated\_at';
-  perform public._assert_eq(v_n, 7, 'updated_at 트리거가 표마다 하나씩 (중복 생성 없음)');
+  perform public._assert_eq(v_n, 8, 'updated_at 트리거가 표마다 하나씩 (중복 생성 없음)');
+  perform public._assert_eq((select count(*)::int from pg_trigger where tgname = 'users_guard_approval'), 1,
+    '승인 보호 트리거 하나 (중복 생성 없음)');
 end $t$;
 
 -- ── 1. 테스트 계정 (postgres 권한으로 준비) ────────────────────────────────
@@ -48,8 +50,32 @@ set request.jwt.claim.sub = '00000000-0000-0000-0000-00000000000a';
 do $t$
 declare v_raised boolean; v_n int;
 begin
-  insert into public.users (reg_id, req_name, user_type, territory_cd)
-  values ('user_a', '정비사A', 'USER', '경기');
+  -- 본인이 가입하며 승인 칸을 'Approved' 로 적어도 승인 대기로 들어간다
+  insert into public.users (reg_id, req_name, user_type, territory_cd, approval, manage_territory)
+  values ('user_a', '정비사A', 'USER', '경기', 'Approved', '경기');
+  perform public._assert_eq((select approval from public.users where reg_id = 'user_a'), 'Pending',
+    '가입은 승인 대기로 고정된다 (본인이 Approved 로 적어도)');
+  perform public._assert_eq((select manage_territory from public.users where reg_id = 'user_a'), '',
+    '관리 지역은 본인이 정할 수 없다');
+  perform public._assert(not public.is_approved(), '승인 전 A 는 is_approved() 가 거짓');
+
+  v_raised := false;
+  begin
+    update public.users set approval = 'Approved' where reg_id = 'user_a';
+  exception when insufficient_privilege then v_raised := true;
+  end;
+  perform public._assert(v_raised, 'A 는 스스로 승인할 수 없다 (트리거)');
+
+  v_raised := false;
+  begin
+    insert into public.mains (ref_no, reg_date, reg_id, model, serial_no, o_hour, type_cd, system_cat)
+    values ('202609010099', '2026-09-01', 'user_a', '30BRP-X', 'SN-0', 1, 'Troubleshooting', 'Engine');
+  exception when insufficient_privilege then v_raised := true;
+  end;
+  perform public._assert(v_raised, '승인 대기 회원은 기술지원을 등록할 수 없다 (RLS)');
+
+  perform public._assert(not public.reg_id_available('USER_A'), '중복 ID 확인: 대소문자만 달라도 사용 중');
+  perform public._assert(public.reg_id_available('user_z'), '중복 ID 확인: 새 ID 는 사용 가능');
 
   -- 스스로 ADMIN 이 될 수 없다
   v_raised := false;
@@ -88,6 +114,9 @@ do $t$
 declare v_raised boolean := false;
 begin
   perform public._assert(public.is_admin(), '관리자 계정은 is_admin() 이 참');
+  update public.users set approval = 'Approved', approved_by = 'admin', approved_date = current_date
+   where reg_id = 'user_a';
+  perform public._assert_eq((select approval from public.users where reg_id = 'user_a'), 'Approved', '관리자는 가입을 승인한다');
   insert into public.sources (notebook_name, model, files)
   values ('30BRP-X 정비매뉴얼(예시)', '30BRP-X', 'manual.pdf');
   begin
@@ -109,6 +138,25 @@ begin
 
   perform public._assert_eq((select count(*) from public.sources), 1::bigint,
     'USER 도 소스 목록은 읽는다 (모델 검증용)');
+  perform public._assert(public.is_approved(), '승인 뒤 A 는 등록할 수 있다');
+
+  -- 중복 등록 검토 메일: 요청자는 넣기만 하고 읽지 못한다
+  insert into public.mails (mail_id, ref_no, reason, mail_to, subject, body)
+  values ('M00001', '202609010001', 'duplicate', 'admin@example.com', '[중복 검토]', '본문');
+  perform public._assert_eq((select count(*) from public.mails), 0::bigint, 'USER 는 메일 대기 목록을 읽지 못한다');
+  v_raised := false;
+  begin
+    insert into public.mails (mail_id, ref_no, reason, subject, body) values ('M00002', '202609010001', 'duplicate', 's', 'b');
+  exception when unique_violation then v_raised := true;
+  end;
+  perform public._assert(v_raised, '같은 건·같은 사유의 대기 메일은 하나만 (부분 UNIQUE)');
+
+  v_raised := false;
+  begin
+    insert into public.users (reg_id, req_name) values ('User_A', '대소문자');
+  exception when unique_violation then v_raised := true;
+  end;
+  perform public._assert(v_raised, '대소문자만 다른 ID 는 UNIQUE 가 막는다');
 
   -- CHECK 제약
   v_raised := false;
@@ -175,6 +223,7 @@ do $t$
 declare v_n int; v_raised boolean := false;
 begin
   insert into public.users (reg_id, req_name) values ('user_b', '정비사B');
+  perform public._assert_eq((select count(*) from public.mails), 0::bigint, 'B 는 메일 대기 목록을 못 본다');
   perform public._assert_eq((select count(*) from public.mains), 0::bigint, 'B 는 A 의 등록 건을 못 본다');
   perform public._assert_eq((select count(*) from public.inquiries), 0::bigint, 'B 는 A 의 문의를 못 본다');
   perform public._assert_eq((select count(*) from public.users), 1::bigint, 'B 는 자기 사용자 행만 본다');
@@ -217,6 +266,13 @@ begin
   exception when check_violation then v_raised := true;
   end;
   perform public._assert(v_raised, '빈 회신 내용은 CHECK 가 막는다');
+  perform public._assert_eq((select count(*) from public.mails), 1::bigint, '관리자는 메일 대기 목록을 본다');
+  update public.mails set status = 'Sent', sent_date = now() where mail_id = 'M00001';
+  insert into public.mails (mail_id, ref_no, reason, subject, body) values ('M00002', '202609010001', 'duplicate', 's', 'b');
+  perform public._assert_eq((select count(*) from public.mails), 2::bigint, '보낸 뒤에는 같은 사유 메일을 다시 대기시킬 수 있다');
+  update public.users set user_type = 'ADMIN', manage_territory = '경기; 경남' where reg_id = 'user_b';
+  perform public._assert_eq((select manage_territory from public.users where reg_id = 'user_b'), '경기; 경남', '관리자는 관리 지역을 정한다');
+  update public.users set user_type = 'USER', manage_territory = '' where reg_id = 'user_b';
 end $t$;
 
 -- ── 6. A 는 자기 건의 회신을 읽고, B 는 못 읽는다 ─────────────────────────────
@@ -276,7 +332,7 @@ set request.jwt.claim.sub = '';
 do $t$
 declare v_raised boolean := false; v_t text;
 begin
-  foreach v_t in array array['app_members','users','sources','mains','inquiries','replies','access_log']
+  foreach v_t in array array['app_members','users','sources','mains','inquiries','replies','access_log','mails']
   loop
     execute format('select count(*) = 0 from public.%I', v_t) into v_raised;
     perform public._assert(v_raised, 'anon 은 ' || v_t || ' 을 한 행도 못 본다');
@@ -312,9 +368,10 @@ begin
     'proacl 에 PUBLIC·anon EXECUTE 가 없다' || coalesce(' (발견: ' || v_bad || ')', ''));
   perform public._assert_eq(
     (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-      where n.nspname = 'public' and p.proname in ('is_admin','owns_request','close_access_log','set_updated_at')
+      where n.nspname = 'public' and p.proname in ('is_admin','owns_request','close_access_log','set_updated_at',
+                                                   'is_approved','reg_id_available','users_guard_approval')
         and p.proconfig @> array['search_path=public']),
-    4, '함수 4개 모두 search_path=public 고정');
+    7, '함수 7개 모두 search_path=public 고정');
 end $t$;
 
 do $t$ begin raise notice ''; raise notice '전부 통과했습니다.'; end $t$;

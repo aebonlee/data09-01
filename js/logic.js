@@ -43,15 +43,21 @@
   var SHEETS = {
     // action_content(조치 내용)·complete_date(완료일)는 2026-09-28 수강생 확인으로 추가(기획서 10장 6번).
     // 두 열이 없는 옛 엑셀도 그대로 읽힙니다(빈 값).
+    // complete_image(완료 사진)는 2026-09-29 수강생 답변(「조치내용, 완료사진, 완료일」)으로 추가.
     '등록': ['ref_no', 'status', 'reg_date', 'reg_id', 'model', 'serial_no', 'o_hour', 'type_cd', 'system_cat',
-      'action_content', 'complete_date'],
+      'action_content', 'complete_date', 'complete_image'],
     '문의': ['ref_no', 's_turn', 'reg_date', 'reg_id', 'phenomenon', 'requirement', 's_image'],
     '회신': ['ref_no', 'r_turn', 'r_reply_date', 'r_title', 'req_summary', 'reply_content', 'ref_info'],
-    '사용자': ['reg_id', 'req_name', 'e_mail', 'phone', 'country_cd', 'dealer', 'join_date', 'user_type', 'territory_cd'],
+    // approval·approved_by·approved_date(가입 승인)·manage_territory(관리 지역)는 2026-09-29 수강생 답변으로 추가.
+    // 네 열이 없는 옛 엑셀의 사용자는 이미 쓰던 계정이므로 승인된 것으로 읽습니다.
+    '사용자': ['reg_id', 'req_name', 'e_mail', 'phone', 'country_cd', 'dealer', 'join_date', 'user_type', 'territory_cd',
+      'approval', 'approved_by', 'approved_date', 'manage_territory'],
     '소스등록': ['notebook_name', 'model', 'files'],
-    'Log Data': ['reg_id', 'login_date', 'logout_date']
+    'Log Data': ['reg_id', 'login_date', 'logout_date'],
+    // PS 통보 메일 발송 대기 목록 (AI 답변 불가·중복 등록). 정적 웹이라 실제 발송은 메일 앱에서 합니다.
+    '메일': ['mail_id', 'ref_no', 'reason', 'mail_to', 'subject', 'body', 'created_date', 'status', 'sent_date']
   };
-  var SHEET_KEYS = { '등록': 'mains', '문의': 'inquiries', '회신': 'replies', '사용자': 'users', '소스등록': 'sources', 'Log Data': 'logs' };
+  var SHEET_KEYS = { '등록': 'mains', '문의': 'inquiries', '회신': 'replies', '사용자': 'users', '소스등록': 'sources', 'Log Data': 'logs', '메일': 'mails' };
 
   // 필드 크기 (Data Field정의 시트의 VARCHAR 크기)
   var MAX_LEN = { ref_no: 20, model: 20, serial_no: 20, reg_id: 20, ref_info: 50 };
@@ -63,7 +69,7 @@
   var VIDEO_EXT = ['mp4', 'mov', 'm4v', 'avi', 'wmv', 'mkv', 'webm', '3gp', 'mpeg', 'mpg'];
 
   function emptyDb() {
-    return { mains: [], inquiries: [], replies: [], users: [], sources: [], logs: [] };
+    return { mains: [], inquiries: [], replies: [], users: [], sources: [], logs: [], mails: [] };
   }
 
   // ── 날짜 ─────────────────────────────────────────────────────
@@ -212,14 +218,15 @@
     out.mains.push({
       ref_no: refNo, status: STATUS.SUBMITTED, reg_date: date, reg_id: user.reg_id,
       model: src.model, serial_no: String(form.serial_no).trim(), o_hour: parseOHour(form.o_hour),
-      type_cd: form.type_cd, system_cat: form.system_cat, action_content: '', complete_date: ''
+      type_cd: form.type_cd, system_cat: form.system_cat, action_content: '', complete_date: '', complete_image: ''
     });
     out.inquiries.push({
       ref_no: refNo, s_turn: 1, reg_date: date, reg_id: user.reg_id,
       phenomenon: String(form.phenomenon).trim(), requirement: String(form.requirement).trim(),
       s_image: imageFileNames(refNo, fileNames, 1).join('; ')
     });
-    return { ok: true, db: out, ref_no: refNo };
+    // 같은 모델·호기의 기 등록 건 — 막지 않고 알려서 PS 담당자 검토로 넘깁니다(Flowchart 「중복 검토」)
+    return { ok: true, db: out, ref_no: refNo, duplicates: findDuplicates(out, refNo) };
   }
 
   // ── 후속 요청(기술지원3): s_turn 증가, 상태 다시 접수 ───────────
@@ -389,30 +396,227 @@
     if (!date) errors.push({ field: 'complete_date', code: 'bad_date' });
     else if (main.reg_date && date < main.reg_date) errors.push({ field: 'complete_date', code: 'date_before_reg' });
     else if (date > toDateStr(now)) errors.push({ field: 'complete_date', code: 'date_future' });
+    // 완료 사진(선택) — 사진만, 최대 5장. 파일명은 'ref_no_C일련번호'(문의 첨부 'ref_no_일련번호'와 구분)
+    var photos = closing.complete_image || [];
+    var pc = validateAttachments(photos);
+    if (pc.videos) errors.push({ field: 'complete_image', code: 'photo_only' });
+    pc.errors.forEach(function (e) { errors.push({ field: 'complete_image', code: e.code }); });
     if (errors.length) return { ok: false, errors: errors };
     main.status = STATUS.COMPLETED;
     main.action_content = action;
     main.complete_date = date;
+    main.complete_image = completeImageNames(refNo, photos.map(fileName)).join('; ');
     return { ok: true, db: out };
   }
 
-  // PS 담당자 통보 메일 초안 (AI 답변 불가 건)
+  function completeImageNames(refNo, names) {
+    return (names || []).map(function (name, i) {
+      var m = String(name).match(/\.([A-Za-z0-9]{1,5})$/);
+      return refNo + '_C' + (i + 1) + (m ? '.' + m[1].toLowerCase() : '');
+    });
+  }
+
+  // ── 중복 등록 검토 (Flowchart 「기 등록 건?」) ─────────────────────
+  // 같은 모델·같은 호기(serial_no)로 등록된 다른 건 중 아직 종료되지 않았거나 최근 1달 안에 등록된 건.
+  // 등록을 막지는 않습니다 — 수강생 답변(2026-09-29)대로 PS 담당자에게 메일로 넘겨 검토합니다.
+  function normSerial(s) { return String(s || '').trim().toUpperCase().replace(/\s+/g, ''); }
+  function findDuplicates(db, refNo) {
+    var me = db.mains.filter(function (m) { return m.ref_no === refNo; })[0];
+    if (!me || !normSerial(me.serial_no)) return [];
+    var base = parseDate(me.reg_date) || new Date();
+    var from = toDateStr(oneMonthBefore(base));
+    return db.mains.filter(function (m) {
+      if (m.ref_no === refNo) return false;
+      if (normModel(m.model) !== normModel(me.model) || normSerial(m.serial_no) !== normSerial(me.serial_no)) return false;
+      return m.status !== STATUS.COMPLETED || (m.reg_date >= from && m.reg_date <= me.reg_date);
+    }).sort(function (a, b) { return a.ref_no < b.ref_no ? 1 : -1; })
+      .map(function (m) { return m.ref_no; });
+  }
+
+  // ── 회원 등록·승인 (2026-09-29 수강생 답변) ─────────────────────────
+  // 사번이 없는 대리점 인원이 많아 본인이 정한 ID 로 가입하고, 기 등록 관리자가 승인해야 쓸 수 있습니다.
+  var APPROVAL = { PENDING: 'Pending', APPROVED: 'Approved', REJECTED: 'Rejected' };
+  var ID_RULE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,19}$/; // 영문·숫자로 시작, 3~20자 (reg_id VARCHAR(20))
+  var EMAIL_RULE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  // 옛 데이터(승인 칸 없음)의 사용자는 이미 쓰던 계정이므로 승인된 것으로 봅니다
+  function approvalOf(u) { return (u && u.approval) || APPROVAL.APPROVED; }
+  function isApproved(u) { return !!u && approvalOf(u) === APPROVAL.APPROVED; }
+  function isApprovedAdmin(u) { return isApproved(u) && u.user_type === 'ADMIN'; }
+  function findUserId(db, id) {
+    var k = String(id || '').trim().toLowerCase();
+    if (!k) return null;
+    return db.users.filter(function (u) { return String(u.reg_id).toLowerCase() === k; })[0] || null;
+  }
+  // 중복 ID 확인 — 대소문자만 다른 ID 도 같은 ID 로 봅니다(Kim01 / kim01 혼동 방지)
+  function checkRegId(db, id) {
+    var s = String(id || '').trim();
+    if (!s) return { ok: false, code: 'required' };
+    if (!ID_RULE.test(s)) return { ok: false, code: 'bad_id' };
+    if (findUserId(db, s)) return { ok: false, code: 'id_taken' };
+    return { ok: true, code: 'id_ok' };
+  }
+  // 결과: { ok, errors, db, user, autoApproved }. 승인된 관리자가 한 명도 없으면(빈 DB) 첫 가입자를
+  // 관리자로 바로 승인합니다 — 그렇지 않으면 아무도 승인할 수 없기 때문입니다.
+  function registerMember(db, form, now) {
+    var errors = [];
+    var id = checkRegId(db, form.reg_id);
+    if (!id.ok) errors.push({ field: 'reg_id', code: id.code });
+    ['req_name', 'dealer'].forEach(function (k) { if (!String(form[k] || '').trim()) errors.push({ field: k, code: 'required' }); });
+    var mail = String(form.e_mail || '').trim();
+    if (!mail) errors.push({ field: 'e_mail', code: 'required' });
+    else if (!EMAIL_RULE.test(mail)) errors.push({ field: 'e_mail', code: 'bad_email' });
+    if (!form.territory_cd) errors.push({ field: 'territory_cd', code: 'required' });
+    else if (TERRITORY_CD.indexOf(form.territory_cd) === -1) errors.push({ field: 'territory_cd', code: 'bad_code' });
+    if (errors.length) return { ok: false, errors: errors };
+    var out = clone(db);
+    var first = !out.users.some(isApprovedAdmin);
+    var today = toDateStr(now);
+    var user = {
+      reg_id: String(form.reg_id).trim(), req_name: String(form.req_name).trim(), e_mail: mail,
+      phone: String(form.phone || '').trim(), country_cd: String(form.country_cd || '').trim(),
+      dealer: String(form.dealer).trim(), join_date: today,
+      user_type: first ? 'ADMIN' : 'USER', territory_cd: form.territory_cd,
+      approval: first ? APPROVAL.APPROVED : APPROVAL.PENDING,
+      approved_by: first ? '(첫 관리자 자동 승인)' : '', approved_date: first ? today : '', manage_territory: ''
+    };
+    out.users.push(user);
+    return { ok: true, db: out, user: user, autoApproved: first };
+  }
+  // 로그인 가능 여부: { ok, code } — unknown_id / pending / rejected
+  function canLogin(db, id) {
+    var u = findUserId(db, id);
+    if (!u) return { ok: false, code: 'unknown_id' };
+    if (approvalOf(u) === APPROVAL.PENDING) return { ok: false, code: 'pending', user: u };
+    if (approvalOf(u) === APPROVAL.REJECTED) return { ok: false, code: 'rejected', user: u };
+    return { ok: true, user: u };
+  }
+  function listTerritories(s) {
+    return splitList(s).filter(function (x, i, a) { return TERRITORY_CD.indexOf(x) !== -1 && a.indexOf(x) === i; });
+  }
+  // 관리자가 승인·반려하거나 권한·관리 지역을 바꿉니다.
+  // change: { approval?, user_type?, manage_territory?(배열 또는 '경기; 경남') }
+  function updateMember(db, regId, change, admin, now) {
+    if (!isApprovedAdmin(admin)) return { ok: false, errors: [{ field: 'reg_id', code: 'not_admin' }] };
+    var out = clone(db);
+    var u = findUserId(out, regId);
+    if (!u) return { ok: false, errors: [{ field: 'reg_id', code: 'not_found' }] };
+    var next = {
+      approval: change.approval || approvalOf(u),
+      user_type: change.user_type || u.user_type || 'USER'
+    };
+    if ([APPROVAL.PENDING, APPROVAL.APPROVED, APPROVAL.REJECTED].indexOf(next.approval) === -1) return { ok: false, errors: [{ field: 'approval', code: 'bad_code' }] };
+    if (USER_TYPE.indexOf(next.user_type) === -1) return { ok: false, errors: [{ field: 'user_type', code: 'bad_code' }] };
+    // 승인된 관리자가 0명이 되면 아무도 승인할 수 없으므로 막습니다
+    var wasAdmin = isApprovedAdmin(u);
+    var staysAdmin = next.approval === APPROVAL.APPROVED && next.user_type === 'ADMIN';
+    if (wasAdmin && !staysAdmin && out.users.filter(isApprovedAdmin).length <= 1) {
+      return { ok: false, errors: [{ field: 'reg_id', code: 'last_admin' }] };
+    }
+    if (change.approval && change.approval !== approvalOf(u)) {
+      u.approved_by = change.approval === APPROVAL.PENDING ? '' : admin.reg_id;
+      u.approved_date = change.approval === APPROVAL.PENDING ? '' : toDateStr(now);
+    }
+    u.approval = next.approval;
+    u.user_type = next.user_type;
+    if (change.manage_territory != null) {
+      var list = Array.isArray(change.manage_territory) ? change.manage_territory : splitList(change.manage_territory);
+      u.manage_territory = listTerritories(list.join('; ')).join('; ');
+    }
+    if (u.user_type !== 'ADMIN') u.manage_territory = '';
+    return { ok: true, db: out, user: u };
+  }
+
+  // ── PS 통보 메일 (AI 답변 불가·중복 등록) ────────────────────────────
+  // 받는 사람: 요청자 지역(territory_cd)을 관리 지역으로 가진 승인된 관리자.
+  // 그런 관리자가 없으면 승인된 관리자 전원에게 보내고 fallback 으로 표시합니다(메일이 아무에게도 안 가는 것을 막음).
+  function psRecipients(db, refNo) {
+    var main = db.mains.filter(function (m) { return m.ref_no === refNo; })[0];
+    var requester = main ? userOf(db, main.reg_id) : null;
+    var territory = requester ? requester.territory_cd || '' : '';
+    var admins = db.users.filter(function (u) { return isApprovedAdmin(u) && EMAIL_RULE.test(String(u.e_mail || '')); });
+    var matched = territory ? admins.filter(function (u) { return listTerritories(u.manage_territory).indexOf(territory) !== -1; }) : [];
+    var list = matched.length ? matched : admins;
+    return {
+      territory: territory, fallback: !matched.length,
+      to: list.map(function (u) { return u.e_mail; }), ids: list.map(function (u) { return u.reg_id; })
+    };
+  }
+  var MAIL_REASON = { CANNOT: 'cannot_answer', DUPLICATE: 'duplicate' };
+  function mailHeadLines(db, main, q) {
+    var requester = userOf(db, main.reg_id) || {};
+    return [
+      '기준번호: ' + main.ref_no, '모델: ' + main.model, '차량 호기: ' + main.serial_no,
+      '가동시간: ' + main.o_hour, '유형: ' + codeLabel(TYPE_CD, main.type_cd),
+      '구분: ' + codeLabel(SYSTEM_CAT, main.system_cat),
+      '요청자: ' + main.reg_id + (requester.dealer ? ' · ' + requester.dealer : '') + (requester.territory_cd ? ' · 지역 ' + requester.territory_cd : ''),
+      '접수 차수: ' + q.s_turn, '', '현상: ' + q.phenomenon, '요청사항: ' + q.requirement
+    ];
+  }
+  // reason: AI 가 적은 답변 불가 사유
   function buildPsMail(db, refNo, reason) {
     var main = db.mains.filter(function (m) { return m.ref_no === refNo; })[0];
     var q = latestInquiry(db, refNo);
     if (!main || !q) return null;
+    var rc = psRecipients(db, refNo);
     return {
+      reason: MAIL_REASON.CANNOT, ref_no: refNo, to: rc.to, fallback: rc.fallback, territory: rc.territory,
       subject: '[기술지원 이관] ' + main.ref_no + ' ' + main.model + ' — AI 답변 불가',
-      body: [
-        'PS 담당자님, AI가 매뉴얼에서 근거를 찾지 못한 기술지원 요청을 넘깁니다.', '',
-        '기준번호: ' + main.ref_no, '모델: ' + main.model, '차량 호기: ' + main.serial_no,
-        '가동시간: ' + main.o_hour, '유형: ' + codeLabel(TYPE_CD, main.type_cd),
-        '구분: ' + codeLabel(SYSTEM_CAT, main.system_cat), '요청자 ID: ' + main.reg_id,
-        '접수 차수: ' + q.s_turn, '', '현상: ' + q.phenomenon, '요청사항: ' + q.requirement,
-        '', 'AI 답변 불가 사유: ' + (reason || '(없음)'), '',
-        '보완 자료를 작성하시면 소스 등록 화면에서 해당 모델 소스에 등록해 주세요.'
-      ].join('\n')
+      body: ['PS 담당자님, AI가 매뉴얼에서 근거를 찾지 못한 기술지원 요청을 넘깁니다.', '']
+        .concat(mailHeadLines(db, main, q))
+        .concat(['', 'AI 답변 불가 사유: ' + (reason || '(없음)'), '',
+          '검토 후 보완 자료를 소스 등록 화면에서 해당 모델 소스에 등록하고, AI 회신을 다시 받아 저장해 주세요.'])
+        .join('\n')
     };
+  }
+  function buildDupMail(db, refNo, dupRefs) {
+    var main = db.mains.filter(function (m) { return m.ref_no === refNo; })[0];
+    var q = latestInquiry(db, refNo);
+    if (!main || !q) return null;
+    dupRefs = dupRefs || findDuplicates(db, refNo);
+    var rc = psRecipients(db, refNo);
+    var lines = dupRefs.map(function (r) {
+      var m = db.mains.filter(function (x) { return x.ref_no === r; })[0] || {};
+      var dq = latestInquiry(db, r) || {};
+      return '- ' + r + ' · ' + (m.status || '') + ' · 등록 ' + (m.reg_date || '') + ' · ' + (m.reg_id || '') + ' · ' + (dq.phenomenon || '');
+    });
+    return {
+      reason: MAIL_REASON.DUPLICATE, ref_no: refNo, to: rc.to, fallback: rc.fallback, territory: rc.territory,
+      subject: '[기술지원 중복 검토] ' + main.ref_no + ' ' + main.model + ' ' + main.serial_no,
+      body: ['PS 담당자님, 같은 모델·호기로 이미 등록된 건이 있는 기술지원 요청입니다. 검토 후 AI 회신을 진행해 주세요.', '']
+        .concat(mailHeadLines(db, main, q))
+        .concat(['', '기 등록 건(같은 모델·호기):'], lines).join('\n')
+    };
+  }
+  // 메일 앱 열기 주소. 받는 사람이 여럿이면 쉼표로 잇습니다.
+  function mailtoHref(mail) {
+    var to = (Array.isArray(mail.to) ? mail.to : splitList(mail.mail_to || mail.to)).join(',');
+    return 'mailto:' + to + '?subject=' + encodeURIComponent(mail.subject || '') + '&body=' + encodeURIComponent(mail.body || '');
+  }
+  // 발송 대기 목록에 넣습니다. 같은 건·같은 사유로 아직 대기 중인 메일이 있으면 새로 만들지 않고 내용을 갱신합니다.
+  function queueMail(db, mail, now) {
+    if (!mail) return { ok: false, db: db };
+    var out = clone(db);
+    out.mails = out.mails || [];
+    var to = (Array.isArray(mail.to) ? mail.to : splitList(mail.to)).join('; ');
+    var cur = out.mails.filter(function (x) { return x.ref_no === mail.ref_no && x.reason === mail.reason && x.status === 'Pending'; })[0];
+    if (cur) {
+      cur.mail_to = to; cur.subject = mail.subject; cur.body = mail.body;
+      return { ok: true, db: out, mail: cur, updated: true };
+    }
+    var max = out.mails.reduce(function (n, x) { return Math.max(n, parseInt(String(x.mail_id).replace(/\D/g, ''), 10) || 0); }, 0);
+    var row = {
+      mail_id: 'M' + pad(max + 1, 5), ref_no: mail.ref_no, reason: mail.reason, mail_to: to,
+      subject: mail.subject, body: mail.body, created_date: toDateTimeStr(now), status: 'Pending', sent_date: ''
+    };
+    out.mails.push(row);
+    return { ok: true, db: out, mail: row, updated: false };
+  }
+  function markMailSent(db, mailId, now) {
+    var out = clone(db);
+    var m = (out.mails || []).filter(function (x) { return x.mail_id === mailId; })[0];
+    if (!m) return { ok: false, db: db };
+    m.status = 'Sent'; m.sent_date = toDateTimeStr(now);
+    return { ok: true, db: out };
   }
 
   // ── 조회 목록 ────────────────────────────────────────────────
@@ -577,6 +781,8 @@
           o.complete_date = cd ? toDateStr(cd) : o.complete_date;
         }
         if ('type_cd' in o) o.type_cd = normTypeCd(o.type_cd);
+        if (name === '사용자' && !o.approval) o.approval = APPROVAL.APPROVED; // 옛 엑셀: 이미 쓰던 계정
+        if (name === '메일' && !o.status) o.status = 'Pending';
       });
       db[SHEET_KEYS[name]] = list;
       report.read.push(name + ' ' + list.length + '건');
@@ -603,7 +809,11 @@
     imageFileNames: imageFileNames, splitList: splitList, createRequest: createRequest, addFollowUp: addFollowUp,
     oneMonthBefore: oneMonthBefore, recentOwnRequests: recentOwnRequests, latestInquiry: latestInquiry,
     latestReply: latestReply, buildAiPrompt: buildAiPrompt, parseAiAnswer: parseAiAnswer, addReply: addReply,
-    completeRequest: completeRequest, buildPsMail: buildPsMail, codeLabel: codeLabel, userOf: userOf,
+    completeRequest: completeRequest, buildPsMail: buildPsMail, buildDupMail: buildDupMail, completeImageNames: completeImageNames,
+    findDuplicates: findDuplicates, APPROVAL: APPROVAL, approvalOf: approvalOf, isApproved: isApproved, isApprovedAdmin: isApprovedAdmin,
+    findUserId: findUserId, checkRegId: checkRegId, registerMember: registerMember, canLogin: canLogin, updateMember: updateMember,
+    listTerritories: listTerritories, psRecipients: psRecipients, MAIL_REASON: MAIL_REASON, mailtoHref: mailtoHref,
+    queueMail: queueMail, markMailSent: markMailSent, codeLabel: codeLabel, userOf: userOf,
     buildListRows: buildListRows, filterRows: filterRows, sessionMinutes: sessionMinutes,
     formatDuration: formatDuration, buildLogRows: buildLogRows, upsertSource: upsertSource,
     toCsv: toCsv, dbToSheets: dbToSheets, sheetsToDb: sheetsToDb

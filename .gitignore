@@ -2,3 +2,8 @@
 node_modules/
 __pycache__/
 .env
+
+# 회사 매뉴얼 PDF(저작물·대용량)와 거기서 뽑은 텍스트 JSON 은 리포에 넣지 않습니다(공개 리포)
+docs/source/manual/
+*.manual.json
+manual-index/

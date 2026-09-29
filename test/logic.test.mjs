@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const L = require('../js/logic.js');
 const Sample = require('../js/sample-data.js');
+const M = require('../js/manual.js');
 
 let passed = 0;
 function test(name, fn) {
@@ -298,7 +299,7 @@ test('CSV: BOM·따옴표·줄바꿈 이스케이프', () => {
 test('엑셀 시트 왕복: dbToSheets → sheetsToDb 가 같은 데이터', () => {
   const db = Sample.build(NOW);
   const back = L.sheetsToDb(L.dbToSheets(db));
-  for (const k of ['mains', 'inquiries', 'replies', 'users', 'sources', 'logs']) {
+  for (const k of ['mains', 'inquiries', 'replies', 'users', 'sources', 'logs', 'mails']) {
     assert.deepEqual(back.db[k], db[k], k);
   }
   assert.deepEqual(back.report.problems, []);
@@ -335,6 +336,265 @@ test('화면·코드값에 쓰는 유형 표기는 Specification 하나(오타 �
   assert.deepEqual(L.TYPE_CD.map(t => t.code), ['Troubleshooting', 'Maintenance', 'Specification']);
 });
 
+console.log('완료 사진 (2026-09-29)');
+function answered() {
+  const db = baseDb();
+  db.mains.push({ ref_no: '202609200001', status: 'Answered', reg_date: '2026-09-20', reg_id: 'u1', model: '30BRP-X', serial_no: 'S1', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine', action_content: '', complete_date: '', complete_image: '' });
+  return db;
+}
+test('완료 사진 파일명은 ref_no_C일련번호 + 원래 확장자', () => {
+  const r = L.completeRequest(answered(), '202609200001', { action_content: 'x', complete_image: [{ name: 'a.JPG', type: 'image/jpeg' }, 'b.png'] }, NOW);
+  assert.equal(r.ok, true);
+  assert.equal(r.db.mains[0].complete_image, '202609200001_C1.jpg; 202609200001_C2.png');
+});
+test('완료 사진 없어도 종료(선택 항목), 칸은 빈 값', () => {
+  assert.equal(L.completeRequest(answered(), '202609200001', { action_content: 'x' }, NOW).db.mains[0].complete_image, '');
+});
+test('완료 사진 6장·영상·문서는 거부', () => {
+  const six = Array.from({ length: 6 }, (_, i) => 'p' + i + '.jpg');
+  assert.deepEqual(L.completeRequest(answered(), '202609200001', { action_content: 'x', complete_image: six }, NOW).errors,
+    [{ field: 'complete_image', code: 'too_many_images' }]);
+  const five = L.completeRequest(answered(), '202609200001', { action_content: 'x', complete_image: six.slice(0, 5) }, NOW);
+  assert.equal(five.ok, true);
+  assert.ok(L.completeRequest(answered(), '202609200001', { action_content: 'x', complete_image: ['v.mp4'] }, NOW).errors.some(e => e.code === 'photo_only'));
+  assert.ok(L.completeRequest(answered(), '202609200001', { action_content: 'x', complete_image: ['doc.pdf'] }, NOW).errors.some(e => e.code === 'bad_file_type'));
+});
+
+console.log('회원 등록·승인 (2026-09-29)');
+const joinForm = { reg_id: 'kim01', req_name: '김', e_mail: 'kim@example.com', dealer: 'D', territory_cd: '경기' };
+function withAdmin() {
+  const db = L.emptyDb();
+  db.users.push({ reg_id: 'boss', req_name: '관리', e_mail: 'boss@example.com', dealer: 'HQ', user_type: 'ADMIN', territory_cd: 'Direct Sales', approval: 'Approved', manage_territory: '경기; 경남' });
+  return db;
+}
+test('중복 ID: 대소문자만 달라도 같은 ID, 규칙 밖 ID 거부', () => {
+  const db = withAdmin();
+  assert.equal(L.checkRegId(db, 'BOSS').code, 'id_taken');
+  assert.equal(L.checkRegId(db, ' boss ').code, 'id_taken');
+  assert.equal(L.checkRegId(db, 'boss2').ok, true);
+  assert.equal(L.checkRegId(db, 'ab').code, 'bad_id');
+  assert.equal(L.checkRegId(db, '_abc').code, 'bad_id');
+  assert.equal(L.checkRegId(db, 'a'.repeat(21)).code, 'bad_id');
+  assert.equal(L.checkRegId(db, '김봉수').code, 'bad_id');
+  assert.equal(L.checkRegId(db, '').code, 'required');
+});
+test('가입하면 승인 대기(USER), 대기·반려 계정은 로그인 불가', () => {
+  const r = L.registerMember(withAdmin(), joinForm, NOW);
+  assert.equal(r.ok, true);
+  assert.equal(r.autoApproved, false);
+  assert.equal(r.user.approval, 'Pending');
+  assert.equal(r.user.user_type, 'USER');
+  assert.equal(L.canLogin(r.db, 'kim01').code, 'pending');
+  assert.equal(L.canLogin(r.db, 'nobody').code, 'unknown_id');
+  const rej = L.updateMember(r.db, 'kim01', { approval: 'Rejected' }, r.db.users[0], NOW);
+  assert.equal(L.canLogin(rej.db, 'kim01').code, 'rejected');
+});
+test('가입 양식: 같은 ID 두 번·이메일 형식·지역 코드 검사', () => {
+  const r = L.registerMember(withAdmin(), joinForm, NOW);
+  assert.deepEqual(L.registerMember(r.db, { ...joinForm, reg_id: 'KIM01' }, NOW).errors, [{ field: 'reg_id', code: 'id_taken' }]);
+  assert.deepEqual(L.registerMember(withAdmin(), { ...joinForm, e_mail: 'x@y' }, NOW).errors, [{ field: 'e_mail', code: 'bad_email' }]);
+  assert.deepEqual(L.registerMember(withAdmin(), { ...joinForm, territory_cd: '서울' }, NOW).errors, [{ field: 'territory_cd', code: 'bad_code' }]);
+});
+test('관리자가 승인하면 로그인 가능, 승인자·승인일 기록', () => {
+  const r = L.registerMember(withAdmin(), joinForm, NOW);
+  const a = L.updateMember(r.db, 'kim01', { approval: 'Approved' }, r.db.users[0], NOW);
+  assert.equal(a.ok, true);
+  assert.equal(L.canLogin(a.db, 'KIM01').ok, true);
+  assert.equal(a.user.approved_by, 'boss');
+  assert.equal(a.user.approved_date, '2026-09-28');
+});
+test('승인 대기 계정·일반 사용자는 승인할 수 없다', () => {
+  const r = L.registerMember(withAdmin(), joinForm, NOW);
+  const r2 = L.registerMember(r.db, { ...joinForm, reg_id: 'lee01' }, NOW);
+  assert.equal(L.updateMember(r2.db, 'lee01', { approval: 'Approved' }, r2.db.users[1], NOW).errors[0].code, 'not_admin');
+  const pendingAdmin = { ...r2.db.users[1], user_type: 'ADMIN' };
+  assert.equal(L.updateMember(r2.db, 'lee01', { approval: 'Approved' }, pendingAdmin, NOW).errors[0].code, 'not_admin');
+});
+test('빈 DB 첫 가입자만 관리자로 자동 승인', () => {
+  const r = L.registerMember(L.emptyDb(), joinForm, NOW);
+  assert.equal(r.autoApproved, true);
+  assert.equal(r.user.user_type, 'ADMIN');
+  assert.equal(L.canLogin(r.db, 'kim01').ok, true);
+  assert.equal(L.registerMember(r.db, { ...joinForm, reg_id: 'lee01' }, NOW).autoApproved, false);
+});
+test('마지막 승인 관리자는 내리거나 중지할 수 없다', () => {
+  const db = withAdmin();
+  assert.equal(L.updateMember(db, 'boss', { user_type: 'USER' }, db.users[0], NOW).errors[0].code, 'last_admin');
+  assert.equal(L.updateMember(db, 'boss', { approval: 'Rejected' }, db.users[0], NOW).errors[0].code, 'last_admin');
+});
+test('관리 지역: 코드값만·중복 제거, USER 로 내리면 비움', () => {
+  const r = L.registerMember(withAdmin(), joinForm, NOW);
+  const a = L.updateMember(r.db, 'kim01', { approval: 'Approved', user_type: 'ADMIN', manage_territory: ['경기', '서울', '경기', 'Europe'] }, r.db.users[0], NOW);
+  assert.equal(a.user.manage_territory, '경기; Europe');
+  const b = L.updateMember(a.db, 'kim01', { user_type: 'USER' }, a.db.users[0], NOW);
+  assert.equal(b.user.manage_territory, '');
+});
+test('승인 칸 없는 옛 사용자·옛 엑셀은 승인된 것으로 본다', () => {
+  assert.equal(L.isApproved({ reg_id: 'x' }), true);
+  const r = L.sheetsToDb({ '사용자': [L.SHEETS['사용자'].slice(0, 9), ['old1', '옛', '', '', 'KR', 'D', '2026-01-01', 'USER', '경기']] });
+  assert.equal(r.db.users[0].approval, 'Approved');
+  assert.equal(L.canLogin(r.db, 'old1').ok, true);
+});
+
+console.log('중복 등록·PS 메일 (2026-09-29)');
+function dupDb() {
+  const db = withAdmin();
+  db.users.push({ reg_id: 'gl', req_name: '해외', e_mail: 'gl@example.com', dealer: 'HQ', user_type: 'ADMIN', territory_cd: 'Direct Sales', approval: 'Approved', manage_territory: 'Europe' },
+    { reg_id: 'u1', req_name: '가', dealer: 'D1', user_type: 'USER', territory_cd: '경기', approval: 'Approved' },
+    { reg_id: 'u9', req_name: '나', dealer: 'D9', user_type: 'USER', territory_cd: '강원', approval: 'Approved' });
+  db.sources.push({ notebook_name: 'nb', model: '30BRP-X', files: '' });
+  return db;
+}
+test('같은 모델·호기의 진행 중 건은 중복, 다른 호기·오래된 종료 건은 아님', () => {
+  let db = dupDb();
+  db.mains.push(
+    { ref_no: '202609010001', status: 'Answered', reg_date: '2026-09-01', reg_id: 'u9', model: '30BRP-X', serial_no: 'unf 452', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine' },
+    { ref_no: '202608010001', status: 'Completed', reg_date: '2026-08-01', reg_id: 'u1', model: '30BRP-X', serial_no: 'UNF452', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine' },
+    { ref_no: '202609100001', status: 'Completed', reg_date: '2026-09-10', reg_id: 'u1', model: '30BRP-X', serial_no: 'UNF452', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine' },
+    { ref_no: '202609150001', status: 'Submitted', reg_date: '2026-09-15', reg_id: 'u1', model: '30BRP-X', serial_no: 'OTHER', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine' });
+  const r = L.createRequest(db, { ...form, serial_no: 'UNF452' }, { reg_id: 'u1', user_type: 'USER' }, NOW);
+  assert.equal(r.ok, true);
+  // 진행 중(09-01, 호기 공백·대소문자 무시) + 1달 안 종료(09-10). 1달 넘은 종료(08-01)·다른 호기는 빠짐
+  assert.deepEqual(r.duplicates, ['202609100001', '202609010001']);
+  const r2 = L.createRequest(db, { ...form, serial_no: 'NEW-1' }, { reg_id: 'u1', user_type: 'USER' }, NOW);
+  assert.deepEqual(r2.duplicates, []);
+});
+test('PS 메일 받는 사람: 요청자 지역 담당 관리자, 없으면 전원(fallback)', () => {
+  const db = dupDb();
+  db.mains.push({ ref_no: '202609280001', status: 'Submitted', reg_date: '2026-09-28', reg_id: 'u1', model: '30BRP-X', serial_no: 'S', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine' },
+    { ref_no: '202609280002', status: 'Submitted', reg_date: '2026-09-28', reg_id: 'u9', model: '30BRP-X', serial_no: 'S2', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine' });
+  const a = L.psRecipients(db, '202609280001');
+  assert.deepEqual(a.to, ['boss@example.com']);
+  assert.equal(a.fallback, false);
+  const b = L.psRecipients(db, '202609280002'); // 강원 담당 없음
+  assert.deepEqual(b.to, ['boss@example.com', 'gl@example.com']);
+  assert.equal(b.fallback, true);
+  // 승인 안 된 관리자는 받지 않는다
+  db.users[0].approval = 'Pending';
+  assert.deepEqual(L.psRecipients(db, '202609280001').to, ['gl@example.com']);
+});
+test('AI 답변 불가·중복 메일 초안: 받는 사람·제목·기 등록 건 목록', () => {
+  const db = dupDb();
+  db.mains.push({ ref_no: '202609270001', status: 'Answered', reg_date: '2026-09-27', reg_id: 'u9', model: '30BRP-X', serial_no: 'S', o_hour: 1, type_cd: 'Troubleshooting', system_cat: 'Engine' });
+  db.inquiries.push({ ref_no: '202609270001', s_turn: 1, phenomenon: '먼저 건', requirement: 'r' });
+  const r = L.createRequest(db, { ...form, serial_no: 'S' }, { reg_id: 'u1', user_type: 'USER' }, NOW);
+  const dm = L.buildDupMail(r.db, r.ref_no, r.duplicates);
+  assert.equal(dm.reason, 'duplicate');
+  assert.deepEqual(dm.to, ['boss@example.com']);
+  assert.ok(dm.subject.includes('중복') && dm.body.includes('202609270001') && dm.body.includes('먼저 건'));
+  const cm = L.buildPsMail(r.db, r.ref_no, '근거 없음');
+  assert.equal(cm.reason, 'cannot_answer');
+  assert.ok(cm.body.includes('근거 없음') && cm.body.includes('지역 경기'));
+});
+test('mailto: 받는 사람 쉼표, 제목·본문 인코딩', () => {
+  const href = L.mailtoHref({ to: ['a@x.com', 'b@x.com'], subject: '제목 & 1', body: '줄1\n줄2' });
+  assert.equal(href, 'mailto:a@x.com,b@x.com?subject=' + encodeURIComponent('제목 & 1') + '&body=' + encodeURIComponent('줄1\n줄2'));
+  assert.equal(L.mailtoHref({ mail_to: 'a@x.com; b@x.com', subject: '', body: '' }).startsWith('mailto:a@x.com,b@x.com?'), true);
+});
+test('발송 대기 목록: 같은 건·사유는 하나로, 보냄 표시 후엔 새로 쌓임, 엑셀 왕복', () => {
+  let db = dupDb();
+  const mail = { reason: 'duplicate', ref_no: '202609280001', to: ['a@x.com'], subject: 's', body: 'b' };
+  let q = L.queueMail(db, mail, NOW);
+  assert.equal(q.mail.mail_id, 'M00001');
+  q = L.queueMail(q.db, { ...mail, body: 'b2' }, NOW);
+  assert.equal(q.updated, true);
+  assert.equal(q.db.mails.length, 1);
+  assert.equal(q.db.mails[0].body, 'b2');
+  const s = L.markMailSent(q.db, 'M00001', NOW);
+  assert.equal(s.db.mails[0].status, 'Sent');
+  const q2 = L.queueMail(s.db, mail, NOW);
+  assert.equal(q2.mail.mail_id, 'M00002');
+  const back = L.sheetsToDb(L.dbToSheets(q2.db));
+  assert.deepEqual(back.db.mails, q2.db.mails);
+});
+
+console.log('매뉴얼 근거 검색 (2026-09-29)');
+const pagesFixture = [
+  { n: 1, text: 'CONTENTS\nSECTION 1 GENERAL\n  Group 1 Safety hints ---------------------------- 1-1\n  Group 2 Specifications ...................... 1-2\nSECTION 7 ELECTRICAL SYSTEM\n  Group 3 Electric components -------------------- 7-3\nAPPENDIX: SETTING PROCEDURE ................ A-1' },
+  { n: 2, text: 'SAFETY\nAlways stop the engine.\n1-1' },
+  { n: 3, text: 'SPECIFICATIONS\nWheel nut tightening torque 20 kgf·m\n1-2' },
+  { n: 4, text: 'ELECTRIC COMPONENTS\nSTEPPER 219 DB Alarm will go off if stepper motor line voltages are mismatched.\nSteering is cut off.\n7-3' },
+  { n: 5, text: 'Code 2190 is not the same code.\nstepper\n7-4' },
+  { n: 6, text: 'Setting procedure for the controller.\nA-1' }
+];
+test('쪽 표기: 따로 떨어진 줄 중 마지막(0-1·6-17·8-4-1·A-1), 본문 속 숫자는 아님', () => {
+  assert.equal(M.pageLabel('a\n6-17\nb'), '6-17');
+  assert.equal(M.pageLabel('x\n8-4-1'), '8-4-1');
+  assert.equal(M.pageLabel('A-1'), 'A-1');
+  assert.equal(M.pageLabel('torque 6-17 Nm'), '');
+});
+test('목차: SECTION·Group 과 쪽 표기 → PDF 쪽번호, 목차 쪽 자신은 제외', () => {
+  const ix = M.makeIndex({ file: 'TEST-1_SM.pdf' }, pagesFixture);
+  assert.deepEqual(ix.toc.tocPages, [1]);
+  const e = ix.toc.entries;
+  assert.deepEqual(e.map(x => [x.level, x.title, x.page]), [
+    [1, 'SECTION 1 GENERAL', 2], [2, 'Group 1 Safety hints', 2], [2, 'Group 2 Specifications', 3],
+    [1, 'SECTION 7 ELECTRICAL SYSTEM', 4], [2, 'Group 3 Electric components', 4], [1, 'APPENDIX: SETTING PROCEDURE', 6]]);
+  assert.equal(M.sectionOf(ix, 4), 'SECTION 7 ELECTRICAL SYSTEM › Group 3 Electric components');
+  assert.equal(M.sectionOf(ix, 3), 'SECTION 1 GENERAL › Group 2 Specifications');
+});
+test('목차 정규식이 긴 점선 줄에서 멈추지 않는다(역추적 폭발 방지)', () => {
+  const t0 = Date.now();
+  M.buildToc([{ n: 1, text: ('Title ' + '. '.repeat(400) + 'x\n').repeat(30) }]);
+  assert.ok(Date.now() - t0 < 500, (Date.now() - t0) + 'ms');
+});
+test('검색: 낱말 경계(219 ≠ 2190), 여러 낱말 함께 나온 쪽이 먼저, 목차 쪽 제외', () => {
+  const ix = M.makeIndex({ file: 'TEST-1_SM.pdf' }, pagesFixture);
+  const r = M.search([ix], '219 stepper steering');
+  assert.equal(r.results[0].n, 4);
+  assert.equal(r.results[0].label, '7-3');
+  assert.deepEqual(r.results[0].hits, ['219', 'stepper', 'steering']);
+  assert.deepEqual(r.results.map(x => x.n), [4, 5]);
+  assert.deepEqual(r.results[1].hits, ['stepper']); // 2190 은 219 로 세지 않음
+  assert.equal(M.search([ix], 'electrical').results.length, 0); // 목차 쪽(1)에만 있는 낱말
+  assert.deepEqual(M.search([ix], '').results, []);
+});
+test('모델로 매뉴얼 고르기: 적용 모델 → 같은 계열 → 전체', () => {
+  const a = M.makeIndex({ file: '15182023BRP-X OM.pdf' }, pagesFixture);
+  const b = M.makeIndex({ file: 'BRP-9_SM.pdf' }, pagesFixture);
+  assert.equal(a.models, '15BRP-X; 18BRP-X; 20BRP-X; 23BRP-X');
+  assert.equal(b.models, 'BRP-9');
+  assert.equal(M.pickManuals([a, b], '18brp-x').match, 'exact');
+  assert.deepEqual(M.pickManuals([a, b], '30BRP-X').list, [a]);
+  assert.equal(M.pickManuals([a, b], '30BRP-X').match, 'family');
+  assert.equal(M.pickManuals([a, b], 'DEMO-25D').match, 'all');
+  assert.equal(M.pickManuals([a, b], 'BRP-9').list[0], b);
+});
+test('접수 내용 → 검색 낱말: 영문 표기·에러코드 숫자 + 한글 현장 용어 영문화', () => {
+  const k = M.keywordsFromRequest({ system_cat: 'Engine' }, { phenomenon: '클러스터에 에러코드 219, Stepper mot Mism 이라고 뜨며 스티어링 휠이 잠긴 상태임.', requirement: '조치 사항' });
+  const w = k.split(' ');
+  for (const x of ['219', 'stepper', 'mot', 'mism', 'steering', 'cluster', 'error', 'code']) assert.ok(w.includes(x), x + ' in ' + k);
+});
+test('프롬프트 발췌: 근거 표기·목차 위치·쪽 번호, 길이 제한', () => {
+  const ix = M.makeIndex({ file: 'TEST-1_SM.pdf' }, pagesFixture);
+  const block = M.groundingBlock([{ index: ix, n: 4 }], 40);
+  assert.ok(block.includes('### [TEST-1 SM p.7-3] SECTION 7 ELECTRICAL SYSTEM › Group 3 Electric components (PDF 4쪽)'));
+  assert.ok(block.includes('…(이하 생략)'));
+  assert.ok(block.includes('[답변불가]'));
+  assert.equal(M.groundingBlock([]), '');
+});
+test('회신 근거 표기로 쪽 찾기(p.7-3, 쪽 표기 없으면 PDF 쪽번호), 없는 쪽은 null', () => {
+  const ix = M.makeIndex({ file: 'TEST-1_SM.pdf' }, pagesFixture);
+  assert.equal(M.findRef([ix], 'TEST-1 SM p.7-3').n, 4);
+  assert.equal(M.findRef([ix], 'test-1 sm p.2').n, 2);
+  assert.equal(M.findRef([ix], 'TEST-1 SM p.9-9'), null);
+  assert.equal(M.findRef([ix], '다른 매뉴얼 p.7-3'), null);
+});
+test('JSON 색인 읽기: 형식 검사, 저장용 사본 → 다시 읽으면 같은 목차', () => {
+  const ix = M.makeIndex({ file: 'TEST-1_SM.pdf' }, pagesFixture);
+  const again = M.readIndexJson(JSON.stringify(M.toStorable(ix)));
+  assert.equal(again.ok, true);
+  assert.deepEqual(again.index.toc, ix.toc);
+  assert.equal(M.readIndexJson('{').code, 'bad_json');
+  assert.equal(M.readIndexJson({ format: 'x', pages: [] }).code, 'bad_format');
+  assert.equal(M.readIndexJson({ format: M.FORMAT, pages: [] }).code, 'no_pages');
+});
+test('PDF 텍스트 조각 → 줄: 위→아래·왼→오, 겹쳐 찍은 같은 조각 하나로', () => {
+  const it = (s, x, y, w) => ({ str: s, transform: [10, 0, 0, 10, x, y], width: w });
+  const text = M.itemsToText([it('world', 60, 700, 30), it('Hello', 10, 700, 30), it('Hello', 10.2, 700, 30), it('Line2', 10, 680, 30), it('7-3', 300, 40, 12)]);
+  assert.equal(text, 'Hello world\nLine2\n7-3');
+});
+
 console.log('예시 데이터');
 test('예시 데이터 자체 정합성: 코드값·ref_no 형식·참조·소스 모델', () => {
   const db = Sample.build(NOW);
@@ -353,6 +613,10 @@ test('예시 데이터 자체 정합성: 코드값·ref_no 형식·참조·소�
   }
   for (const q of [...db.inquiries, ...db.replies]) assert.ok(refs.has(q.ref_no));
   assert.ok(L.recentOwnRequests(db, 'demo_user01', NOW).length >= 2);
+  // 가입 승인·관리 지역 시연: 승인 대기 1명, 관리 지역이 나뉜 관리자 2명
+  assert.equal(db.users.filter(u => u.approval === 'Pending').length, 1);
+  assert.deepEqual(L.psRecipients(db, db.mains.find(m => m.reg_id === 'demo_eu01').ref_no).to, ['ps-global@example.com']);
+  assert.deepEqual(L.psRecipients(db, db.mains.find(m => m.reg_id === 'demo_user01').ref_no).to, ['ps@example.com']);
 });
 
 console.log(process.exitCode ? '\n실패가 있습니다.' : '\n전체 ' + passed + '개 통과');

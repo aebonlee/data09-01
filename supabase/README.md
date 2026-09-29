@@ -21,12 +21,13 @@ DB 로 옮기면 기록이 한 곳에 모이고, 누가 무엇을 볼 수 있는
 | 테이블 | 용도 | localStorage 대응 |
 |---|---|---|
 | `app_members` | 권한(USER/ADMIN). 관리자 판정의 기준입니다 | 없음 (새로 생김) |
-| `users` | 사용자 (사용자 시트). 비밀번호 열은 없고 로그인은 Supabase Auth 가 맡습니다 | `data09-01.db` → `users` |
+| `users` | 사용자 (사용자 시트). 비밀번호 열은 없고 로그인은 Supabase Auth 가 맡습니다. 가입 승인(`approval`·`approved_by`·`approved_date`)·관리 지역(`manage_territory`) 칸 — 2026-09-29 | `data09-01.db` → `users` |
 | `sources` | 소스등록 (모델 ↔ 노트북·매뉴얼 파일) | `data09-01.db` → `sources` |
-| `mains` | 기술지원 등록 (ref_no 1건 = 1행, 상태·조치 내용·완료일) | `data09-01.db` → `mains` |
+| `mains` | 기술지원 등록 (ref_no 1건 = 1행, 상태·조치 내용·완료일·완료 사진 파일명) | `data09-01.db` → `mains` |
 | `inquiries` | 문의 (ref_no × s_turn, 후속 요청마다 1행) | `data09-01.db` → `inquiries` |
 | `replies` | 회신 (ref_no × r_turn) | `data09-01.db` → `replies` |
 | `access_log` | 접속 Log (로그인·로그아웃 시각). 기록성 표라 수정·삭제가 되지 않습니다 | `data09-01.db` → `logs` |
+| `mails` | PS 통보 메일 발송 대기 (AI 답변 불가·중복 등록). 같은 건·같은 사유의 대기 메일은 하나만 — 2026-09-29 | `data09-01.db` → `mails` |
 
 `data09-01.session`(로그인 상태)은 Supabase Auth 세션으로 바뀌고, `data09-01.lang`(화면 언어)은 기기별 설정이라 그대로 브라우저에 둡니다.
 
@@ -37,12 +38,15 @@ DB 로 옮기면 기록이 한 곳에 모이고, 누가 무엇을 볼 수 있는
 
 | 누가 | 볼 수 있는 것 | 할 수 있는 것 |
 |---|---|---|
-| 정비사(USER) | 자기 등록 건·문의·회신, 자기 사용자 정보, 자기 접속 Log, 소스 목록 | 등록, 후속 요청, 조치 결과 등록 |
-| PS 담당자(ADMIN) | 전부 | 회신 등록, 소스 등록, 권한 부여 |
+| 정비사(USER, 승인 대기) | 자기 사용자 정보, 소스 목록 | 없음 — 관리자 승인을 기다립니다 |
+| 정비사(USER, 승인됨) | 자기 등록 건·문의·회신, 자기 사용자 정보, 자기 접속 Log, 소스 목록 | 등록, 후속 요청, 조치 결과 등록, 자기 건의 중복 검토 메일 대기 등록 |
+| PS 담당자(ADMIN) | 전부 | 가입 승인·관리 지역 지정, 회신 등록, 소스 등록, 권한 부여, 메일 보냄 표시 |
 | 비로그인 | 없음 | 없음 |
 
 - 관리자 여부는 `app_members.role` 만으로 정합니다. `users.user_type` 은 화면 표시용이며, 사용자가 스스로 ADMIN 으로 바꿀 수 없습니다.
 - 접속 Log 는 INSERT·SELECT 만 열려 있습니다. 로그아웃 시각은 `close_access_log(id)` 함수로 본인 기록에 한 번만 채웁니다.
+- 가입하면 `approval` 은 본인이 무엇을 적든 `Pending` 으로 들어가고, 승인·관리 지역은 관리자만 바꿉니다(트리거 `users_guard_approval`). 스크립트를 이미 만든 프로젝트에 다시 실행하면 기존 사용자는 `Approved` 로 채워집니다(쓰던 계정이 막히지 않도록).
+- ID 는 대소문자만 달라도 같은 ID 로 봅니다(`lower(reg_id)` UNIQUE). 가입 화면의 중복 확인은 `reg_id_available(id)` 함수로 합니다(남의 행은 읽지 못하므로 있는지 여부만 돌려줌).
 - 함수는 모두 로그인 사용자만 실행할 수 있습니다(비로그인 실행 권한 제거).
 
 ## 적용 방법
@@ -61,13 +65,15 @@ DB 로 옮기면 기록이 한 곳에 모이고, 누가 무엇을 볼 수 있는
 insert into public.app_members (user_id, role)
 select id, 'ADMIN' from auth.users where email = '관리자 이메일'
 on conflict (user_id) do update set role = 'ADMIN';
+update public.users set user_type = 'ADMIN', approval = 'Approved', approved_by = '(첫 관리자)', approved_date = current_date
+ where owner_id = (select id from auth.users where email = '관리자 이메일');
 ```
 
 ## 확인 방법
 
-- Table Editor 에 위 7개 표가 보이는지 확인합니다.
+- Table Editor 에 위 8개 표가 보이는지 확인합니다.
 - Authentication → Policies 에서 표마다 RLS 가 켜져 있고(Enabled) 정책이 붙어 있는지 확인합니다.
-- SQL Editor 에서 다음을 실행해 7개 표 모두 `true` 인지 봅니다.
+- SQL Editor 에서 다음을 실행해 8개 표 모두 `true` 인지 봅니다.
 
 ```sql
 select relname, relrowsecurity from pg_class

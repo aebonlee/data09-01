@@ -6,6 +6,7 @@
   <title>AI 기술지원 — 지게차 현장 기술지원 접수·조회</title>
   <meta name="description" content="현장 정비사의 기술 문의를 정형 양식으로 접수하고, 매뉴얼 기반 AI 회신을 붙여 넣어 기준번호별로 쌓는 브라우저용 기술지원 도구(1단계 시연판)">
   <meta name="robots" content="noindex">
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -36,7 +37,15 @@
   <main id="main" class="inner main" tabindex="-1"></main>
 
   <footer class="site-footer">
-    <div class="inner" data-t="footer">1단계 시연판 · 데이터는 이 브라우저에만 저장됩니다</div>
+    <div class="inner">
+      <p class="footer-company">
+        <span data-t="footer_address">경기도 성남시 분당구 분당수서로 477 HD현대글로벌R&amp;D센터(GRC) 13층 (13553)</span>
+        <span data-t="footer_phone">대표전화 : 02-479-7142   고객 상담 및 제품 문의 : 1899-7282</span>
+        <span data-t="footer_biz">사업자등록번호 : 493-81-02117</span>
+      </p>
+      <p class="footer-copy">COPYRIGHT © 2023 HD Hyundai XiteSolution. ALL RIGHTS RESERVED.</p>
+      <p class="footer-note" data-t="footer">1단계 시연판 · 데이터는 이 브라우저에만 저장됩니다</p>
+    </div>
   </footer>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
@@ -51,9 +60,12 @@
     </form>
   </dialog>
 
-  <!-- 로컬 파일(file://)로 열어도 돌도록 module 이 아닌 일반 스크립트로 불러옵니다 -->
+  <!-- 로컬 파일(file://)로 열어도 돌도록 module 이 아닌 일반 스크립트로 불러옵니다.
+       pdf.js(vendor/pdfjs)는 「매뉴얼 근거」 화면에서 PDF 를 불러올 때만 읽어 들입니다. -->
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="js/logic.js"></script>
+  <script src="js/manual.js"></script>
+  <script src="js/manual-store.js"></script>
   <script src="js/i18n.js"></script>
   <script src="js/sample-data.js"></script>
   <script src="js/store.js"></script>

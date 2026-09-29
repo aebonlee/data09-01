@@ -16,7 +16,7 @@ const wb = XLSX.utils.book_new();
 for (const [name, rows] of Object.entries(sheets)) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
 fs.writeFileSync(path.join(out, '예시데이터_기술지원DB.xlsx'), XLSX.write(wb, { bookType: 'xlsx', type: 'buffer' }));
 
-const csvName = { '등록': '등록', '문의': '문의', '회신': '회신', '사용자': '사용자', '소스등록': '소스등록', 'Log Data': 'LogData' };
+const csvName = { '등록': '등록', '문의': '문의', '회신': '회신', '사용자': '사용자', '소스등록': '소스등록', 'Log Data': 'LogData', '메일': '메일' };
 for (const [name, rows] of Object.entries(sheets)) {
   const headers = rows[0].map(k => ({ key: k, label: k }));
   const objs = rows.slice(1).map(r => Object.fromEntries(rows[0].map((k, i) => [k, r[i]])));

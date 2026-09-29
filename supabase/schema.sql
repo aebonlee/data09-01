@@ -10,14 +10,15 @@
 --
 --  본인 프로젝트에 올리는 것을 전제로 하므로 테이블 이름에 접두사를 붙이지 않았습니다.
 --
---  테이블 (7)
+--  테이블 (8)
 --    app_members  권한(USER/ADMIN) — 관리자 판정의 기준
---    users        사용자 (사용자 시트)
+--    users        사용자 (사용자 시트) — 2026-09-29 가입 승인·관리 지역 칸 추가
 --    sources      소스등록 (모델 ↔ 노트북·매뉴얼 파일)
 --    mains        기술지원 등록 (등록 시트, ref_no 1건 = 1행)
 --    inquiries    문의 (ref_no × s_turn)
 --    replies      회신 (ref_no × r_turn)
 --    access_log   접속 Log (기록성 — 수정·삭제 불가)
+--    mails        PS 통보 메일 발송 대기 (AI 답변 불가·중복 등록) — 2026-09-29
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
@@ -140,6 +141,56 @@ create table if not exists public.access_log (
 create index if not exists access_log_login_idx on public.access_log (login_date desc);
 
 -- ----------------------------------------------------------------------------
+-- 1-2. 2026-09-29 수강생 답변 반영 — 이미 만든 프로젝트에도 그대로 다시 실행하면 붙는다
+-- ----------------------------------------------------------------------------
+
+-- 가입 승인: 본인이 정한 ID 로 가입 → 기 등록 관리자가 승인해야 사용.
+-- 이미 있던 사용자는 쓰던 계정이므로 'Approved' 로 채우고(ADD 때의 기본값), 이후 가입자의 기본값은 'Pending'.
+alter table public.users add column if not exists approval text not null default 'Approved';
+alter table public.users alter column approval set default 'Pending';
+alter table public.users add column if not exists approved_by   varchar(20);
+alter table public.users add column if not exists approved_date date;
+-- 관리 지역: '경기; 경남' — 이 지역 사용자의 PS 메일을 받는 관리자
+alter table public.users add column if not exists manage_territory text not null default '';
+do $c$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'users_approval_check') then
+    alter table public.users add constraint users_approval_check
+      check (approval in ('Pending', 'Approved', 'Rejected'));
+  end if;
+  -- ID 규칙(도구 checkRegId 와 같음): 영문·숫자로 시작, 3~20자. 옛 행은 검사하지 않는다(NOT VALID)
+  if not exists (select 1 from pg_constraint where conname = 'users_reg_id_rule') then
+    alter table public.users add constraint users_reg_id_rule
+      check (reg_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{2,19}$') not valid;
+  end if;
+end;
+$c$;
+-- 중복 ID: 대소문자만 다른 ID 도 같은 ID 로 본다 (Kim01 / kim01). 클라이언트 확인과 별개로 DB 가 막는다
+create unique index if not exists users_reg_id_ci_key on public.users (lower(reg_id));
+
+-- 조치 결과의 완료 사진 파일명 ('ref_no_C1.jpg; ref_no_C2.jpg')
+alter table public.mains add column if not exists complete_image text not null default '';
+
+-- PS 통보 메일 발송 대기 — 정적 웹이라 메일은 사람이 메일 앱에서 보내고 'Sent' 로 표시한다
+create table if not exists public.mails (
+  id           bigint generated always as identity primary key,
+  mail_id      varchar(20) not null unique,                 -- 도구가 매기는 번호 (M00001 …)
+  ref_no       varchar(20) not null references public.mains (ref_no) on delete cascade,
+  reason       text not null check (reason in ('cannot_answer', 'duplicate')),
+  mail_to      text not null default '',                    -- 'a@x.com; b@x.com'
+  subject      text not null,
+  body         text not null,
+  created_date timestamptz not null default now(),
+  status       text not null default 'Pending' check (status in ('Pending', 'Sent')),
+  sent_date    timestamptz,
+  owner_id     uuid not null default auth.uid(),
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
+-- 같은 건·같은 사유의 대기 메일은 하나만 (도구 queueMail 과 같은 규칙을 DB 가 보장)
+create unique index if not exists mails_pending_key on public.mails (ref_no, reason) where status = 'Pending';
+
+-- ----------------------------------------------------------------------------
 -- 2. 함수 — 전부 search_path 를 고정한다
 -- ----------------------------------------------------------------------------
 
@@ -175,6 +226,38 @@ begin
 end;
 $fn$;
 
+-- 로그인한 사람이 승인된 회원인가 (등록·후속 요청 정책에서 쓴다)
+create or replace function public.is_approved()
+returns boolean language sql stable security definer set search_path = public as $fn$
+  select exists (select 1 from public.users u
+                  where u.owner_id = auth.uid() and u.approval = 'Approved');
+$fn$;
+
+-- 중복 ID 확인 — 남의 사용자 행은 RLS 로 못 읽으므로 있는지 여부만 알려 준다
+create or replace function public.reg_id_available(p_reg_id text)
+returns boolean language sql stable security definer set search_path = public as $fn$
+  select not exists (select 1 from public.users u where lower(u.reg_id) = lower(trim(p_reg_id)));
+$fn$;
+
+-- 승인·관리 지역은 관리자만 정한다. 본인이 가입할 때는 승인 대기로 고정하고,
+-- 본인이 자기 행을 고칠 때 승인 칸을 바꾸려 하면 막는다.
+create or replace function public.users_guard_approval()
+returns trigger language plpgsql set search_path = public as $fn$
+begin
+  if public.is_admin() then return new; end if;
+  if tg_op = 'INSERT' then
+    new.approval := 'Pending'; new.approved_by := null; new.approved_date := null; new.manage_territory := '';
+  elsif new.approval is distinct from old.approval or new.approved_by is distinct from old.approved_by
+     or new.approved_date is distinct from old.approved_date or new.manage_territory is distinct from old.manage_territory then
+    raise exception '승인·관리 지역은 관리자만 바꿀 수 있습니다.' using errcode = 'insufficient_privilege';
+  end if;
+  return new;
+end;
+$fn$;
+drop trigger if exists users_guard_approval on public.users;
+create trigger users_guard_approval before insert or update on public.users
+  for each row execute function public.users_guard_approval();
+
 -- updated_at 자동 갱신
 create or replace function public.set_updated_at()
 returns trigger language plpgsql set search_path = public as $fn$
@@ -187,7 +270,7 @@ $fn$;
 do $trg$
 declare t text;
 begin
-  foreach t in array array['app_members','users','sources','mains','inquiries','replies','access_log']
+  foreach t in array array['app_members','users','sources','mains','inquiries','replies','access_log','mails']
   loop
     execute format('drop trigger if exists %I on public.%I', t || '_updated_at', t);
     execute format('create trigger %I before update on public.%I for each row execute function public.set_updated_at()',
@@ -210,6 +293,7 @@ alter table public.mains       enable row level security;
 alter table public.inquiries   enable row level security;
 alter table public.replies     enable row level security;
 alter table public.access_log  enable row level security;
+alter table public.mails       enable row level security;
 
 -- app_members — 본인 권한은 본인이 볼 수 있고, 부여·회수는 관리자만
 drop policy if exists app_members_read   on public.app_members;
@@ -258,8 +342,9 @@ drop policy if exists mains_update on public.mains;
 drop policy if exists mains_delete on public.mains;
 create policy mains_read   on public.mains for select to authenticated
   using (owner_id = auth.uid() or public.is_admin());
+-- 등록은 승인된 회원만 (2026-09-29: 관리자 승인 후 사용)
 create policy mains_insert on public.mains for insert to authenticated
-  with check (owner_id = auth.uid() or public.is_admin());
+  with check ((owner_id = auth.uid() and public.is_approved()) or public.is_admin());
 create policy mains_update on public.mains for update to authenticated
   using (owner_id = auth.uid() or public.is_admin())
   with check (owner_id = auth.uid() or public.is_admin());
@@ -274,7 +359,7 @@ drop policy if exists inquiries_delete on public.inquiries;
 create policy inquiries_read   on public.inquiries for select to authenticated
   using (public.owns_request(ref_no) or public.is_admin());
 create policy inquiries_insert on public.inquiries for insert to authenticated
-  with check ((owner_id = auth.uid() and public.owns_request(ref_no)) or public.is_admin());
+  with check ((owner_id = auth.uid() and public.owns_request(ref_no) and public.is_approved()) or public.is_admin());
 create policy inquiries_update on public.inquiries for update to authenticated
   using (public.is_admin()) with check (public.is_admin());
 create policy inquiries_delete on public.inquiries for delete to authenticated
@@ -302,6 +387,18 @@ create policy access_log_read   on public.access_log for select to authenticated
 create policy access_log_insert on public.access_log for insert to authenticated
   with check (owner_id = auth.uid() and logout_date is null);
 
+-- mails — 관리자만 읽고 보냄 표시한다. 요청자는 자기 건의 중복 검토 메일을 대기 목록에 넣기만 한다
+drop policy if exists mails_read   on public.mails;
+drop policy if exists mails_insert on public.mails;
+drop policy if exists mails_update on public.mails;
+drop policy if exists mails_delete on public.mails;
+create policy mails_read   on public.mails for select to authenticated using (public.is_admin());
+create policy mails_insert on public.mails for insert to authenticated
+  with check ((owner_id = auth.uid() and public.owns_request(ref_no) and status = 'Pending') or public.is_admin());
+create policy mails_update on public.mails for update to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+create policy mails_delete on public.mails for delete to authenticated using (public.is_admin());
+
 -- ----------------------------------------------------------------------------
 -- 4. 함수 실행 권한
 --
@@ -316,6 +413,9 @@ revoke all on function public.is_admin()                from public, anon;
 revoke all on function public.owns_request(text)        from public, anon;
 revoke all on function public.close_access_log(bigint)  from public, anon;
 revoke all on function public.set_updated_at()          from public, anon;
+revoke all on function public.is_approved()             from public, anon;
+revoke all on function public.reg_id_available(text)    from public, anon;
+revoke all on function public.users_guard_approval()    from public, anon;
 
 grant execute on function public.is_admin()               to authenticated;
 grant execute on function public.owns_request(text)       to authenticated;
@@ -323,10 +423,16 @@ grant execute on function public.close_access_log(bigint) to authenticated;
 -- 트리거 전용 함수는 authenticated 를 남긴다. 직접 호출하면
 -- "can only be called as trigger" 로 죽으므로 무해하다.
 grant execute on function public.set_updated_at()         to authenticated;
+grant execute on function public.is_approved()            to authenticated;
+-- 가입은 Supabase Auth 로 계정을 만든 뒤(로그인 상태) 사용자 행을 넣으므로 authenticated 로 충분하다
+grant execute on function public.reg_id_available(text)   to authenticated;
+grant execute on function public.users_guard_approval()   to authenticated;
 
 -- ----------------------------------------------------------------------------
 -- 끝. 첫 관리자 등록 (SQL Editor 에서, 이메일만 바꿔 실행):
 --   insert into public.app_members (user_id, role)
 --   select id, 'ADMIN' from auth.users where email = '<관리자 이메일>'
 --   on conflict (user_id) do update set role = 'ADMIN';
+--   update public.users set user_type = 'ADMIN', approval = 'Approved', approved_by = '(첫 관리자)', approved_date = current_date
+--    where owner_id = (select id from auth.users where email = '<관리자 이메일>');
 -- ----------------------------------------------------------------------------

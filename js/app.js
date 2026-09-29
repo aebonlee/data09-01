@@ -8,15 +8,23 @@
  *   #/sources[/<ref>]  소스등록 (Admin)
  *   #/logs             접속Log (Admin)
  *   #/data             데이터 관리 (예시 데이터·엑셀 가져오기/내보내기)
+ *   #/manual           매뉴얼 근거 검색 (내 PC 의 매뉴얼 PDF → 목차·키워드 검색·발췌)   — 2026-09-29
+ *   #/members          회원 관리 (Admin: 가입 승인·권한·관리 지역)                        — 2026-09-29
+ *   #/mails            PS 메일 발송 대기 (Admin: AI 답변 불가·중복 등록 건)              — 2026-09-29
  */
 (function () {
   'use strict';
-  var L = window.TSLogic, S = window.TSStore;
+  var L = window.TSLogic, S = window.TSStore, M = window.TSManual, MS = window.TSManualStore;
   var db = S.loadDb();
   var lang = S.getLang();
   var t = window.TSI18n.make(lang);
   var main = document.getElementById('main');
   var listFilter = null; // 조회 화면 검색조건 유지
+  var afterRender = null; // 화면을 다시 그린 뒤 띄울 안내(대화상자) — render 가 열린 대화상자를 닫기 때문
+  var manuals = [];       // 불러온 매뉴얼 색인 (IndexedDB 에서 읽어 옴)
+  var manualsReady = MS.list().then(function (list) {
+    manuals = (list || []).map(function (x) { var r = M.readIndexJson(x); return r.ok ? r.index : null; }).filter(Boolean);
+  }).catch(function () { manuals = []; });
 
   // ── 도우미 ────────────────────────────────────────────────
   function h(tag, attrs) {
@@ -42,7 +50,7 @@
   function now() { return new Date(); }
   function session() { return S.getSession(); }
   function me() { var s = session(); return s ? L.userOf(db, s.reg_id) : null; }
-  function isAdmin() { var u = me(); return !!u && u.user_type === 'ADMIN'; }
+  function isAdmin() { return L.isApprovedAdmin(me()); }
   function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
 
   var toastTimer;
@@ -173,11 +181,16 @@
     var nav = document.getElementById('nav');
     nav.textContent = '';
     var u = me();
-    var items = [['request', 'nav_request'], ['list', 'nav_list']];
-    if (u && u.user_type === 'ADMIN') items.push(['sources', 'nav_sources'], ['logs', 'nav_logs']);
+    var items = [['request', 'nav_request'], ['list', 'nav_list'], ['manual', 'nav_manual']];
+    if (L.isApprovedAdmin(u)) {
+      var pendingUsers = db.users.filter(function (x) { return L.approvalOf(x) === 'Pending'; }).length;
+      var pendingMails = (db.mails || []).filter(function (x) { return x.status === 'Pending'; }).length;
+      items.push(['members', 'nav_members', pendingUsers], ['mails', 'nav_mails', pendingMails], ['sources', 'nav_sources'], ['logs', 'nav_logs']);
+    }
     items.push(['data', 'nav_data']);
     items.forEach(function (it) {
-      nav.appendChild(h('a', { href: '#/' + it[0], 'aria-current': route === it[0] ? 'page' : null }, t(it[1])));
+      nav.appendChild(h('a', { href: '#/' + it[0], 'aria-current': route === it[0] ? 'page' : null }, t(it[1]),
+        it[2] ? h('span', { class: 'count-badge', title: t('pending_count') }, String(it[2])) : null));
     });
     document.getElementById('whoami').textContent = u ? u.req_name + ' (' + u.reg_id + (u.user_type === 'ADMIN' ? ' · ADMIN' : '') + ')' : '';
     var auth = document.getElementById('authBtn');
@@ -194,14 +207,16 @@
     if (me()) logout(); else go('#/login');
   });
 
+  // 결과: { ok, code } — 승인 대기·반려된 계정은 로그인하지 못합니다(2026-09-29 수강생 답변)
   function login(regId) {
-    var u = L.userOf(db, regId);
-    if (!u) return false;
+    var chk = L.canLogin(db, regId);
+    if (!chk.ok) return chk;
+    var u = chk.user;
     var at = L.toDateTimeStr(now());
     db.logs.push({ reg_id: u.reg_id, login_date: at, logout_date: '' });
     save();
     S.setSession({ reg_id: u.reg_id, login_date: at });
-    return true;
+    return { ok: true };
   }
   function logout() {
     var s = session();
@@ -253,7 +268,8 @@
     loginForm.addEventListener('submit', function (e) {
       e.preventDefault();
       var id = loginForm.elements.reg_id.value.trim();
-      if (!login(id)) { showErrors(loginForm, []); toast(t('login_unknown'), true); return; }
+      var res = login(id);
+      if (!res.ok) { showErrors(loginForm, []); toast(t('login_' + res.code), true); return; }
       go('#/request');
     });
 
@@ -263,33 +279,47 @@
       accounts.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { loadSample(true); } }, t('load_sample')));
     } else {
       accounts.appendChild(h('div', { class: 'account-list' }, db.users.map(function (u) {
+        var ap = L.approvalOf(u);
         return h('button', { class: 'btn', type: 'button', onclick: function () { loginForm.elements.reg_id.value = u.reg_id; loginForm.elements.reg_id.focus(); } },
-          u.req_name + ' · ' + u.reg_id + (u.user_type === 'ADMIN' ? ' (ADMIN)' : ''));
+          u.req_name + ' · ' + u.reg_id + (u.user_type === 'ADMIN' ? ' (ADMIN)' : ''),
+          ap !== 'Approved' ? h('span', { class: 'status ' + (ap === 'Pending' ? 'red' : 'black'), style: 'margin-left:6px' }, t('approval_' + ap)) : null);
       })));
     }
 
+    // 회원 등록 — 본인이 정한 ID(사번 없음), 중복 ID 확인, 관리자 승인 후 사용 (2026-09-29 수강생 답변)
+    var idInput = h('input', { name: 'reg_id', maxlength: 20, autocomplete: 'off', placeholder: 'kim_bs01' });
+    var idResult = h('small', { class: 'id-check', 'aria-live': 'polite' });
+    function checkId() {
+      var r = L.checkRegId(db, idInput.value);
+      idResult.textContent = t('id_' + (r.ok ? 'ok' : r.code === 'required' ? 'required' : r.code === 'bad_id' ? 'bad' : 'taken'));
+      idResult.className = 'id-check ' + (r.ok ? 'ok' : 'ng');
+      return r;
+    }
+    idInput.addEventListener('input', function () { idResult.textContent = ''; });
+    var idField = h('div', { class: 'field', 'data-field': 'reg_id' }, h('span', null, t('login_id') + ' *'),
+      h('div', { class: 'input-row' }, idInput, h('button', { class: 'btn', type: 'button', onclick: checkId }, t('id_check'))),
+      h('small', { class: 'note' }, t('id_rule')), idResult, h('small', { class: 'err', hidden: true }));
     var memberForm = h('form', { class: 'form-grid', novalidate: true },
-      field(t('login_id'), h('input', { name: 'reg_id', maxlength: 20 }), { name: 'reg_id' }),
-      field(t('f_req_name'), h('input', { name: 'req_name', maxlength: 50 }), { name: 'req_name' }),
-      field(t('f_e_mail'), h('input', { name: 'e_mail', type: 'email', maxlength: 50 }), { name: 'e_mail' }),
+      idField,
+      field(t('f_req_name') + ' *', h('input', { name: 'req_name', maxlength: 50 }), { name: 'req_name' }),
+      field(t('f_e_mail') + ' *', h('input', { name: 'e_mail', type: 'email', maxlength: 50 }), { name: 'e_mail', hint: t('email_hint') }),
       field(t('f_phone'), h('input', { name: 'phone', type: 'tel', maxlength: 20 }), { name: 'phone' }),
       field(t('f_country'), h('input', { name: 'country_cd', maxlength: 20, placeholder: 'KR' }), { name: 'country_cd' }),
-      field(t('f_dealer'), h('input', { name: 'dealer', maxlength: 50 }), { name: 'dealer' }),
-      field(t('f_territory'), codeSelect('territory_cd', L.TERRITORY_CD, ''), { name: 'territory_cd' }),
-      field(t('f_user_type'), codeSelect('user_type', L.USER_TYPE, 'USER'), { name: 'user_type' }),
+      field(t('f_dealer') + ' *', h('input', { name: 'dealer', maxlength: 50 }), { name: 'dealer' }),
+      field(t('f_territory') + ' *', codeSelect('territory_cd', L.TERRITORY_CD, ''), { name: 'territory_cd', hint: t('territory_hint') }),
+      h('p', { class: 'span-all note' }, t('member_note')),
       h('div', { class: 'span-all btn-row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, t('member_save'))));
     memberForm.addEventListener('submit', function (e) {
       e.preventDefault();
-      var v = fd(memberForm), errs = [];
-      ['reg_id', 'req_name', 'dealer'].forEach(function (k) { if (!v[k].trim()) errs.push({ field: k, code: 'required' }); });
-      if (errs.length) { showErrors(memberForm, errs); return; }
-      if (L.userOf(db, v.reg_id.trim())) { toast(t('member_dup'), true); return; }
-      db.users.push({
-        reg_id: v.reg_id.trim(), req_name: v.req_name.trim(), e_mail: v.e_mail.trim(), phone: v.phone.trim(),
-        country_cd: v.country_cd.trim(), dealer: v.dealer.trim(), join_date: L.toDateStr(now()),
-        user_type: v.user_type || 'USER', territory_cd: v.territory_cd
-      });
-      save(); toast(t('member_saved')); render();
+      var res = L.registerMember(db, fd(memberForm), now());
+      if (!res.ok) {
+        showErrors(memberForm, res.errors);
+        if (res.errors.some(function (x) { return x.field === 'reg_id'; })) checkId();
+        return;
+      }
+      save(res.db);
+      afterRender = { title: t('member_title'), body: t(res.autoApproved ? 'member_first_admin' : 'member_pending', { id: res.user.reg_id }) };
+      render();
     });
 
     main.appendChild(h('div', { class: 'login-wrap' },
@@ -398,6 +428,12 @@
       }
       save(res.db);
       toast(refNo ? t('followed_ok', { ref: res.ref_no, turn: res.s_turn }) : t('submitted_ok', { ref: res.ref_no }));
+      // 같은 모델·호기의 기 등록 건이 있으면 막지 않고 PS 담당자 검토 메일을 발송 대기 목록에 넣습니다
+      if (res.duplicates && res.duplicates.length) {
+        var q = L.queueMail(db, L.buildDupMail(db, res.ref_no, res.duplicates), now());
+        if (q.ok) save(q.db);
+        afterRender = { title: t('dup_title'), body: t('dup_user_note', { list: res.duplicates.join(', ') }) };
+      }
       go('#/detail/' + res.ref_no);
     }
 
@@ -541,7 +577,11 @@
         refs.length ? h('div', null, h('span', { class: 'label' }, t('ref_info')),
           h('div', { class: 'chips' }, refs.map(function (x) {
             return h('button', { type: 'button', class: 'chip', onclick: function () {
-              dialog(t('ref_popup'), [h('p', null, h('strong', null, x)), h('p', { class: 'note' }, t('ref_popup_note'))]);
+              // 불러온 매뉴얼에 그 쪽이 있으면 쪽 본문을 보여 줍니다(이전/다음 이동)
+              var hit = M.findRef(manuals, x);
+              if (hit) { showManualPage(hit.index, hit.n); return; }
+              dialog(t('ref_popup'), [h('p', null, h('strong', null, x)), h('p', { class: 'note' }, t(manuals.length ? 'ref_not_found' : 'ref_popup_note')),
+                h('a', { class: 'btn', href: '#/manual' }, t('nav_manual'))]);
             } }, x);
           }))) : null);
     }));
@@ -562,15 +602,30 @@
       closing = h('div', { class: 'card result-card' }, h('h2', null, t('result_title')),
         h('div', { class: 'detail-head' },
           kv(t('f_complete_date'), m.complete_date ? L.displayDate(m.complete_date) : '-'),
-          kv(t('f_action_content'), h('span', { class: 'body' }, m.action_content || '-'))));
+          kv(t('f_action_content'), h('span', { class: 'body' }, m.action_content || '-')),
+          kv(t('f_complete_image'), L.splitList(m.complete_image).join(', ') || '-')));
     } else if (!admin && m.status === 'Answered') {
+      // 완료 사진(선택, 최대 5장) — 2026-09-29 수강생 답변 「조치내용, 완료사진, 완료일」
+      var photoInput = h('input', { type: 'file', name: 'complete_image', multiple: true, accept: 'image/*' });
+      var photoNames = h('ul', { class: 'file-names', hidden: true });
+      photoInput.addEventListener('change', function () {
+        var names = Array.prototype.map.call(photoInput.files, function (f) { return f.name; });
+        var after = L.completeImageNames(refNo, names);
+        photoNames.textContent = '';
+        photoNames.hidden = !names.length;
+        names.forEach(function (n, i) { photoNames.appendChild(h('li', null, n + ' → ' + after[i])); });
+      });
       var closeForm = h('form', { class: 'form-grid', novalidate: true },
         field(t('f_action_content'), h('textarea', { name: 'action_content', rows: 4 }), { name: 'action_content', span: true }),
         field(t('f_complete_date'), h('input', { type: 'date', name: 'complete_date', value: L.toDateStr(now()), min: m.reg_date, max: L.toDateStr(now()) }), { name: 'complete_date' }),
+        h('div', { class: 'field span-all', 'data-field': 'complete_image' }, h('span', null, t('f_complete_image')), photoInput,
+          h('small', { class: 'note' }, t('complete_image_note')), photoNames, h('small', { class: 'err', hidden: true })),
         h('div', { class: 'span-all submit-bar' }, h('button', { class: 'btn btn-primary btn-big', type: 'submit' }, t('btn_complete'))));
       closeForm.addEventListener('submit', function (e) {
         e.preventDefault();
-        var res = L.completeRequest(db, refNo, fd(closeForm), now());
+        var closingData = fd(closeForm);
+        closingData.complete_image = Array.prototype.map.call(photoInput.files, function (f) { return { name: f.name, type: f.type }; });
+        var res = L.completeRequest(db, refNo, closingData, now());
         if (!res.ok) { showErrors(closeForm, res.errors); return; }
         save(res.db); toast(t('completed_ok')); render();
       });
@@ -580,20 +635,29 @@
     main.appendChild(h('div', { class: 'page-head' },
       h('div', { style: 'margin-right:auto' }, h('h1', null, t('detail_title')), h('p', { class: 'note' }, t('detail_sub'))), buttons));
     main.appendChild(head);
+    var dups = L.findDuplicates(db, refNo);
+    if (dups.length) main.appendChild(h('div', { class: 'alert warn' }, t('dup_detail'), ' ',
+      dups.map(function (r, i) { return [i ? ', ' : '', admin || db.mains.some(function (x) { return x.ref_no === r && x.reg_id === u.reg_id; }) ? h('a', { href: '#/detail/' + r }, r) : r]; })));
     main.appendChild(h('div', { class: 'card' }, thread));
     if (closing) main.appendChild(closing);
     if (admin && m.status !== 'Completed') main.appendChild(aiPanel(refNo));
   }
 
-  // AI 회신 — 프롬프트 생성 → 붙여넣기 → 나누기 → 저장 (반자동)
+  // AI 회신 — 프롬프트 생성 → (매뉴얼 근거 붙이기) → 붙여넣기 → 나누기 → 저장 (반자동)
   function aiPanel(refNo) {
-    var prompt = L.buildAiPrompt(db, refNo);
+    var basePrompt = L.buildAiPrompt(db, refNo);
+    var prompt = basePrompt;
+    var promptBox = h('pre', { class: 'prompt-box' }, prompt);
     var paste = h('textarea', { name: 'ai_answer', rows: 8 });
     var result = h('div');
     var panel = h('div', { class: 'card ai-panel' },
       h('h2', null, t('ai_title')),
       h('p', { class: 'note' }, t('ai_step1')), h('p', { class: 'note' }, t('ai_step2')), h('p', { class: 'note' }, t('ai_step3')),
-      h('pre', { class: 'prompt-box' }, prompt),
+      groundingPanel(refNo, function (block) {
+        prompt = basePrompt + block;
+        promptBox.textContent = prompt;
+      }),
+      promptBox,
       h('div', { class: 'btn-row', style: 'margin:10px 0 16px' },
         h('button', { class: 'btn', type: 'button', onclick: function () { copyText(prompt); } }, t('ai_copy'))),
       field(t('ai_paste'), paste),
@@ -606,16 +670,13 @@
       var p = L.parseAiAnswer(paste.value);
       if (!paste.value.trim()) return;
       if (p.cannotAnswer) {
+        // 관리 지역 담당 관리자에게 보낼 메일을 발송 대기 목록에 넣습니다
         var mail = L.buildPsMail(db, refNo, p.reply_content);
-        var mailto = 'mailto:?subject=' + encodeURIComponent(mail.subject) + '&body=' + encodeURIComponent(mail.body);
+        var q = L.queueMail(db, mail, now());
+        if (q.ok) save(q.db);
         append(result, [
           h('div', { class: 'alert warn' }, t('ai_cannot')),
-          h('h3', null, t('ps_title')),
-          h('pre', { class: 'prompt-box' }, mail.subject + '\n\n' + mail.body),
-          h('p', { class: 'note' }, t('ps_note')),
-          h('div', { class: 'btn-row' },
-            h('a', { class: 'btn', href: mailto }, t('ps_mailto')),
-            h('button', { class: 'btn', type: 'button', onclick: function () { copyText(mail.subject + '\n\n' + mail.body); } }, t('ps_copy')))
+          mailCard(q.mail || mail, true)
         ]);
         return;
       }
@@ -637,6 +698,321 @@
       result.appendChild(form);
     }
     return panel;
+  }
+
+  // 매뉴얼 근거 붙이기 — 접수 내용으로 검색 낱말을 만들고, 고른 쪽의 발췌를 프롬프트 끝에 붙입니다
+  function groundingPanel(refNo, onChange) {
+    var m = db.mains.filter(function (x) { return x.ref_no === refNo; })[0] || {};
+    var box = h('div', { class: 'ground-box' }, h('h3', null, t('ground_title')));
+    if (!manuals.length) {
+      box.appendChild(h('p', { class: 'note' }, t('ground_none')));
+      box.appendChild(h('a', { class: 'btn', href: '#/manual' }, t('manual_go')));
+      return box;
+    }
+    var chosen = []; // [{ index, n }]
+    var qInput = h('input', { name: 'ground_q', value: M.keywordsFromRequest(m, L.latestInquiry(db, refNo)) });
+    var info = h('p', { class: 'note' });
+    var list = h('ul', { class: 'result-list' });
+    var picked = h('p', { class: 'note' });
+    function update() {
+      onChange(M.groundingBlock(chosen));
+      picked.textContent = chosen.length ? t('ground_picked', { list: chosen.map(function (c) { return M.refLabel(c.index, c.n); }).join(', ') }) : '';
+    }
+    function run() {
+      var r = M.search(manuals, qInput.value, { model: m.model, limit: 8 });
+      list.textContent = '';
+      info.textContent = r.terms.length ? t('ground_match_' + r.match, { model: m.model || '-' }) + ' ' + t('manual_found', { n: r.total }) : t('manual_need_words');
+      r.results.forEach(function (x) {
+        var ix = manuals.filter(function (y) { return y.file === x.file; })[0];
+        var on = chosen.some(function (c) { return c.index === ix && c.n === x.n; });
+        var cb = h('input', { type: 'checkbox', checked: on, 'aria-label': M.refLabel(ix, x.n) });
+        cb.addEventListener('change', function () {
+          chosen = chosen.filter(function (c) { return !(c.index === ix && c.n === x.n); });
+          if (cb.checked) chosen.push({ index: ix, n: x.n });
+          update();
+        });
+        list.appendChild(resultItem(ix, x, cb));
+      });
+    }
+    qInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); run(); } });
+    append(box, [
+      h('p', { class: 'note' }, t('ground_note')),
+      h('div', { class: 'input-row' }, qInput, h('button', { class: 'btn', type: 'button', onclick: run }, t('search'))),
+      info, list, picked
+    ]);
+    run();
+    return box;
+  }
+
+  // 검색 결과 한 줄 (앞에 체크박스를 붙일 수 있음)
+  function resultItem(ix, x, lead) {
+    return h('li', null, lead || null,
+      h('div', { class: 'result-body' },
+        h('button', { type: 'button', class: 'link-btn', onclick: function () { showManualPage(ix, x.n); } },
+          M.refLabel(ix, x.n) + ' · PDF ' + x.n + t('page_unit')),
+        x.section ? h('span', { class: 'sub' }, x.section) : null,
+        h('span', { class: 'snippet' }, x.snippet)));
+  }
+
+  // 쪽 본문 보기 — 이전/다음 쪽 이동. 매뉴얼 전체를 내보내는 기능은 두지 않습니다(발췌만)
+  function showManualPage(ix, n) {
+    var page = ix.pages.filter(function (p) { return p.n === n; })[0];
+    if (!page) return;
+    var i = ix.pages.indexOf(page);
+    var sec = M.sectionOf(ix, n);
+    var buttons = [];
+    if (i > 0) buttons.push({ label: t('page_prev'), onClick: function () { showManualPage(ix, ix.pages[i - 1].n); } });
+    if (i < ix.pages.length - 1) buttons.push({ label: t('page_next'), onClick: function () { showManualPage(ix, ix.pages[i + 1].n); } });
+    buttons.push({ label: t('ref_copy'), onClick: function () { copyText(M.refLabel(ix, n)); } });
+    buttons.push({ label: t('btn_close'), value: 'close', primary: true });
+    dialog(M.refLabel(ix, n), [
+      h('p', { class: 'note' }, (sec ? sec + ' · ' : '') + 'PDF ' + n + ' / ' + ix.pages.length + t('page_unit')),
+      h('pre', { class: 'page-text' }, page.text || t('page_empty'))
+    ], buttons);
+  }
+
+  // ── 매뉴얼 근거 검색 ──────────────────────────────────────
+  var pdfjsPromise = null;
+  // pdf.js 는 이 화면에서 필요할 때만 불러옵니다(약 1.4MB).
+  // 로컬 파일(file://)로 열면 브라우저가 Worker 를 막으므로 worker 스크립트를 일반 스크립트로 먼저 읽어
+  // 같은 화면(메인 스레드)에서 돌립니다. 웹 주소(http/https)에서는 별도 Worker 로 돌아 화면이 덜 멈춥니다.
+  function loadPdfJs() {
+    if (pdfjsPromise) return pdfjsPromise;
+    function load(src) {
+      return new Promise(function (resolve, reject) {
+        var el = document.createElement('script');
+        el.src = src; el.onload = resolve;
+        el.onerror = function () { reject(new Error(src)); };
+        document.head.appendChild(el);
+      });
+    }
+    pdfjsPromise = load('vendor/pdfjs/pdf.min.js')
+      .then(function () { return location.protocol === 'file:' ? load('vendor/pdfjs/pdf.worker.min.js') : null; })
+      .then(function () {
+        var lib = window.pdfjsLib;
+        if (!lib) throw new Error('pdfjsLib');
+        lib.GlobalWorkerOptions.workerSrc = 'vendor/pdfjs/pdf.worker.min.js';
+        return lib;
+      });
+    pdfjsPromise.catch(function () { pdfjsPromise = null; });
+    return pdfjsPromise;
+  }
+  // PDF 한 개 → 색인. onProgress(현재 쪽, 전체 쪽)
+  function extractPdf(file, onProgress) {
+    return loadPdfJs().then(function (lib) {
+      return file.arrayBuffer().then(function (buf) {
+        return lib.getDocument({ data: new Uint8Array(buf), disableFontFace: true, isEvalSupported: false }).promise;
+      }).then(function (doc) {
+        var pages = [];
+        var n = doc.numPages;
+        function next(i) {
+          if (i > n) { doc.destroy(); return M.makeIndex({ file: file.name, created: L.toDateStr(now()) }, pages); }
+          return doc.getPage(i).then(function (pg) {
+            return pg.getTextContent().then(function (tc) {
+              pages.push({ n: i, text: M.itemsToText(tc.items) });
+              pg.cleanup();
+              if (onProgress) onProgress(i, n);
+              // 쪽마다 한 번씩 화면에 숨 쉴 틈을 줍니다(진행 표시가 갱신되도록)
+              return new Promise(function (r) { setTimeout(r, 0); }).then(function () { return next(i + 1); });
+            });
+          });
+        }
+        return next(1);
+      });
+    });
+  }
+  function saveManual(ix) {
+    manuals = manuals.filter(function (x) { return x.file !== ix.file; }).concat([ix]);
+    manuals.sort(function (a, b) { return a.file < b.file ? -1 : 1; });
+    return MS.put(M.toStorable(ix));
+  }
+
+  var manualQuery = '', manualModel = '';
+  function viewManual() {
+    if (!guard()) return;
+    main.appendChild(h('div', { class: 'page-head' },
+      h('div', { style: 'margin-right:auto' }, h('h1', null, t('manual_title')), h('p', { class: 'note' }, t('manual_sub')))));
+    main.appendChild(h('div', { class: 'alert info' }, t('manual_privacy')));
+
+    // 불러오기
+    var status = h('p', { class: 'note', 'aria-live': 'polite' });
+    var pdfInput = h('input', { type: 'file', accept: '.pdf,application/pdf', multiple: true });
+    var jsonInput = h('input', { type: 'file', accept: '.json,application/json', multiple: true });
+    pdfInput.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(pdfInput.files);
+      if (!files.length) return;
+      pdfInput.disabled = true;
+      var chain = Promise.resolve();
+      files.forEach(function (f, k) {
+        chain = chain.then(function () {
+          status.textContent = t('manual_reading', { name: f.name, i: 0, n: '?', k: k + 1, total: files.length });
+          return extractPdf(f, function (i, n) {
+            if (i === 1 || i % 5 === 0 || i === n) status.textContent = t('manual_reading', { name: f.name, i: i, n: n, k: k + 1, total: files.length });
+          }).then(saveManual);
+        });
+      });
+      chain.then(function () { toast(t('manual_loaded', { n: files.length })); render(); })
+        .catch(function (err) {
+          pdfInput.disabled = false;
+          status.textContent = t('manual_pdf_fail', { msg: String(err && err.message || err) });
+          status.className = 'alert warn';
+        });
+    });
+    jsonInput.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(jsonInput.files);
+      Promise.all(files.map(function (f) { return f.text().then(function (txt) { return { f: f, r: M.readIndexJson(txt) }; }); }))
+        .then(function (rs) {
+          var bad = rs.filter(function (x) { return !x.r.ok; });
+          return Promise.all(rs.filter(function (x) { return x.r.ok; }).map(function (x) { return saveManual(x.r.index); }))
+            .then(function () {
+              render();
+              if (bad.length) dialog(t('manual_json'), bad.map(function (x) { return h('p', { class: 'alert warn' }, x.f.name + ': ' + t('manual_json_' + x.r.code)); }));
+              else toast(t('manual_loaded', { n: rs.length }));
+            });
+        });
+    });
+    main.appendChild(h('div', { class: 'card' },
+      h('h2', null, t('manual_load')),
+      h('div', { class: 'form-grid' },
+        h('div', { class: 'field' }, h('span', null, t('manual_pdf')), pdfInput, h('small', { class: 'note' }, t('manual_pdf_note'))),
+        h('div', { class: 'field' }, h('span', null, t('manual_json')), jsonInput, h('small', { class: 'note' }, t('manual_json_note')))),
+      status,
+      MS.isPersistent() === false ? h('p', { class: 'alert warn' }, t('manual_memory_only')) : null));
+
+    if (!manuals.length) { main.appendChild(h('div', { class: 'card' }, h('p', null, t('manual_empty')))); return; }
+
+    // 불러온 매뉴얼 — 적용 모델은 고칠 수 있습니다(요청 모델과 맞춰 검색 대상을 고름)
+    var rows = manuals.map(function (ix) {
+      var models = h('input', { value: ix.models || '', 'aria-label': t('manual_models') + ' — ' + ix.file });
+      models.addEventListener('change', function () { ix.models = models.value.trim(); saveManual(ix); toast(t('manual_models_saved')); });
+      var toc = (ix.toc && ix.toc.entries) || [];
+      return h('div', { class: 'manual-item' },
+        h('div', { class: 'manual-head' },
+          h('strong', null, ix.title), h('span', { class: 'sub' }, (ix.kind ? ix.kind + ' · ' : '') + ix.pages.length + t('page_unit') + ' · ' + t('manual_toc_count', { n: toc.length })),
+          h('button', { class: 'btn btn-danger', type: 'button', onclick: function () {
+            dialog(t('manual_remove'), h('p', null, t('manual_remove_confirm', { name: ix.title })), [
+              { label: t('btn_close'), value: 'close' },
+              { label: t('manual_remove'), primary: true, onClick: function () { manuals = manuals.filter(function (x) { return x !== ix; }); MS.remove(ix.file); render(); } }]);
+          } }, t('manual_remove'))),
+        h('label', { class: 'field' }, h('span', null, t('manual_models')), models, h('small', { class: 'note' }, t('manual_models_note'))),
+        toc.length ? h('details', { class: 'toc' }, h('summary', null, t('manual_toc')),
+          h('ul', null, toc.map(function (e) {
+            return h('li', { class: e.level === 1 ? 'toc-1' : 'toc-2' },
+              e.page ? h('button', { type: 'button', class: 'link-btn', onclick: function () { showManualPage(ix, e.page); } }, e.title) : h('span', null, e.title),
+              e.label ? h('span', { class: 'sub' }, ' ' + e.label) : null);
+          }))) : h('p', { class: 'note' }, t('manual_no_toc')));
+    });
+    main.appendChild(h('div', { class: 'card' }, h('h2', null, t('manual_list', { n: manuals.length })), rows));
+
+    // 검색
+    var q = h('input', { name: 'q', value: manualQuery, placeholder: 'error code 219 stepper' });
+    var mdl = h('input', { name: 'model', value: manualModel, list: 'modelList3', placeholder: '30BRP-X' });
+    var out = h('div');
+    function run() {
+      manualQuery = q.value; manualModel = mdl.value;
+      out.textContent = '';
+      var r = M.search(manuals, q.value, { model: mdl.value.trim(), limit: 20 });
+      if (!r.terms.length) { out.appendChild(h('p', { class: 'note' }, t('manual_need_words'))); return; }
+      out.appendChild(h('p', { class: 'note' }, (mdl.value.trim() ? t('ground_match_' + r.match, { model: mdl.value.trim() }) + ' ' : '') + t('manual_found', { n: r.total })));
+      out.appendChild(h('ul', { class: 'result-list' }, r.results.map(function (x) {
+        return resultItem(manuals.filter(function (y) { return y.file === x.file; })[0], x);
+      })));
+    }
+    var form = h('form', { class: 'card', novalidate: true },
+      h('h2', null, t('manual_search')),
+      h('p', { class: 'note' }, t('manual_search_note')),
+      h('div', { class: 'form-grid' },
+        field(t('manual_words'), q, { span: false }),
+        field(t('f_model'), mdl)),
+      h('datalist', { id: 'modelList3' }, db.sources.map(function (s) { return h('option', { value: s.model }); })),
+      h('div', { class: 'btn-row', style: 'margin-top:10px' }, h('button', { class: 'btn btn-primary', type: 'submit' }, t('search'))),
+      out);
+    form.addEventListener('submit', function (e) { e.preventDefault(); run(); });
+    main.appendChild(form);
+    if (manualQuery) run();
+  }
+
+  // ── 회원 관리 (Admin) — 가입 승인·권한·관리 지역 ─────────────────
+  function viewMembers() {
+    if (!guard(true)) return;
+    var admin = me();
+    var order = { Pending: 0, Approved: 1, Rejected: 2 };
+    var users = db.users.slice().sort(function (a, b) {
+      return order[L.approvalOf(a)] - order[L.approvalOf(b)] || (a.join_date < b.join_date ? 1 : -1);
+    });
+    function apply(u, change) {
+      var res = L.updateMember(db, u.reg_id, change, admin, now());
+      if (!res.ok) { toast(t('err_' + res.errors[0].code), true); return; }
+      save(res.db); toast(t('member_updated', { id: u.reg_id })); render();
+    }
+    var cards = users.map(function (u) {
+      var ap = L.approvalOf(u);
+      var typeSel = codeSelect('user_type', L.USER_TYPE, u.user_type || 'USER');
+      typeSel.id = 'type_' + u.reg_id;
+      var mine = L.listTerritories(u.manage_territory);
+      var boxes = L.TERRITORY_CD.map(function (c) {
+        return h('label', { class: 'check' }, h('input', { type: 'checkbox', value: c, checked: mine.indexOf(c) !== -1 }), c);
+      });
+      var terrWrap = h('fieldset', { class: 'territory-set', hidden: (u.user_type || 'USER') !== 'ADMIN' },
+        h('legend', null, t('f_manage_territory')), h('div', { class: 'checks' }, boxes),
+        h('small', { class: 'note' }, t('manage_territory_note')));
+      typeSel.addEventListener('change', function () { terrWrap.hidden = typeSel.value !== 'ADMIN'; });
+      function picked() { return boxes.map(function (b) { return b.querySelector('input'); }).filter(function (x) { return x.checked; }).map(function (x) { return x.value; }); }
+      var actions = h('div', { class: 'btn-row' });
+      if (ap !== 'Approved') actions.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { apply(u, { approval: 'Approved', user_type: typeSel.value, manage_territory: picked() }); } }, t('member_approve')));
+      if (ap === 'Pending') actions.appendChild(h('button', { class: 'btn btn-danger', type: 'button', onclick: function () { apply(u, { approval: 'Rejected' }); } }, t('member_reject')));
+      if (ap === 'Approved') {
+        actions.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { apply(u, { user_type: typeSel.value, manage_territory: picked() }); } }, t('member_save_settings')));
+        if (u.reg_id !== admin.reg_id) actions.appendChild(h('button', { class: 'btn', type: 'button', onclick: function () { apply(u, { approval: 'Rejected' }); } }, t('member_suspend')));
+      }
+      return h('div', { class: 'card member-card' },
+        h('div', { class: 'member-head' },
+          h('span', { class: 'status ' + (ap === 'Approved' ? 'blue' : ap === 'Pending' ? 'red' : 'black') }, t('approval_' + ap)),
+          h('strong', null, u.req_name + ' · ' + u.reg_id),
+          h('span', { class: 'sub' }, [u.dealer, u.territory_cd, u.e_mail, t('member_joined', { date: L.displayDate(u.join_date) })].filter(Boolean).join(' · ')),
+          u.approved_by ? h('span', { class: 'sub' }, t('member_approved_by', { by: u.approved_by, date: L.displayDate(u.approved_date) })) : null),
+        h('div', { class: 'form-grid' }, field(t('f_user_type'), typeSel)),
+        terrWrap, actions);
+    });
+    var pending = users.filter(function (u) { return L.approvalOf(u) === 'Pending'; }).length;
+    main.appendChild(h('div', { class: 'page-head' },
+      h('div', { style: 'margin-right:auto' }, h('h1', null, t('members_title')), h('p', { class: 'note' }, t('members_sub', { n: pending })))));
+    append(main, cards.length ? cards : h('div', { class: 'card' }, t('members_empty')));
+  }
+
+  // ── PS 메일 발송 대기 (Admin) ───────────────────────────────
+  // 정적 웹이라 메일을 직접 보내지 않습니다. 메일 앱을 열어(mailto) 담당자가 보내고 「보냄」으로 표시합니다.
+  function mailCard(mail, compact) {
+    var to = Array.isArray(mail.to) ? mail.to : L.splitList(mail.mail_to || mail.to);
+    var rc = mail.ref_no ? L.psRecipients(db, mail.ref_no) : null;
+    var sent = mail.status === 'Sent';
+    return h('div', { class: compact ? 'mail-card' : 'card mail-card' },
+      h('div', { class: 'member-head' },
+        h('span', { class: 'status ' + (sent ? 'black' : 'red') }, t(sent ? 'mail_sent' : 'mail_pending')),
+        h('strong', null, (mail.mail_id ? mail.mail_id + ' · ' : '') + t('mail_reason_' + mail.reason)),
+        mail.ref_no ? h('a', { href: '#/detail/' + mail.ref_no }, mail.ref_no) : null,
+        mail.created_date ? h('span', { class: 'sub' }, mail.created_date + (mail.sent_date ? ' → ' + mail.sent_date : '')) : null),
+      h('p', null, h('span', { class: 'label' }, t('mail_to') + ': '), to.length ? to.join(', ') : t('mail_no_admin')),
+      rc ? h('p', { class: 'note' }, rc.fallback ? t('mail_fallback', { territory: rc.territory || '-' }) : t('mail_routed', { territory: rc.territory })) : null,
+      h('pre', { class: 'prompt-box' }, mail.subject + '\n\n' + mail.body),
+      h('div', { class: 'btn-row' },
+        h('a', { class: 'btn btn-primary', href: L.mailtoHref(mail) }, t('ps_mailto')),
+        h('button', { class: 'btn', type: 'button', onclick: function () { copyText((to.length ? t('mail_to') + ': ' + to.join(', ') + '\n' : '') + mail.subject + '\n\n' + mail.body); } }, t('ps_copy')),
+        !sent && mail.mail_id ? h('button', { class: 'btn', type: 'button', onclick: function () {
+          var r = L.markMailSent(db, mail.mail_id, now());
+          if (r.ok) { save(r.db); toast(t('mail_marked')); render(); }
+        } }, t('mail_mark_sent')) : null,
+        compact ? h('a', { class: 'btn', href: '#/mails' }, t('nav_mails')) : null));
+  }
+  function viewMails() {
+    if (!guard(true)) return;
+    var mails = (db.mails || []).slice().sort(function (a, b) {
+      return (a.status === b.status ? 0 : a.status === 'Pending' ? -1 : 1) || (a.mail_id < b.mail_id ? 1 : -1);
+    });
+    main.appendChild(h('div', { class: 'page-head' },
+      h('div', { style: 'margin-right:auto' }, h('h1', null, t('mails_title')), h('p', { class: 'note' }, t('mails_sub')))));
+    main.appendChild(h('div', { class: 'alert info' }, t('mails_why')));
+    append(main, mails.length ? mails.map(function (m) { return mailCard(m, false); }) : h('div', { class: 'card' }, t('mails_empty')));
   }
 
   // ── 소스등록 ─────────────────────────────────────────────
@@ -780,7 +1156,14 @@
       case 'sources': viewSources(arg); break;
       case 'logs': viewLogs(); break;
       case 'data': viewData(); break;
+      case 'manual': viewManual(); break;
+      case 'members': viewMembers(); break;
+      case 'mails': viewMails(); break;
       default: viewLogin();
+    }
+    if (afterRender) {
+      var ar = afterRender; afterRender = null;
+      dialog(ar.title, h('p', null, ar.body));
     }
     main.setAttribute('data-route', location.hash || '#/'); // 화면 전환 완료 표시(점검용)
     main.focus({ preventScroll: true });
@@ -788,4 +1171,6 @@
   }
   window.addEventListener('hashchange', render);
   render();
+  // 저장된 매뉴얼 색인을 다 읽으면 매뉴얼 화면·AI 회신 화면을 다시 그립니다
+  manualsReady.then(function () { if (/^#\/(manual|detail)/.test(location.hash)) render(); });
 })();

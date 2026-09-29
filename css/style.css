@@ -187,3 +187,49 @@ table.list td.nowrap { white-space: nowrap; }
 @media (max-width: 600px) { .result-card .detail-head { grid-template-columns: minmax(0, 1fr); } }
 .result-card .body { white-space: pre-line; font-weight: 400; word-break: keep-all; overflow-wrap: break-word; }
 .file-names li.alert { list-style: none; margin-left: -1.2em; }
+
+/* ── 2026-09-29 수강생 답변 반영 ─────────────────────────── */
+.count-badge { display: inline-block; min-width: 1.5em; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--st-submitted); color: #fff; font-size: .78rem; line-height: 1.5; text-align: center; }
+.input-row { display: flex; gap: 8px; align-items: stretch; }
+.input-row input { flex: 1 1 auto; min-width: 0; width: auto; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.input-row .btn { flex: 0 0 auto; }
+.id-check { font-size: .9rem; font-weight: 700; }
+.id-check.ok { color: var(--ok); }
+.id-check.ng { color: var(--danger); }
+
+/* 회원 관리·메일 대기 */
+.member-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-bottom: 12px; }
+.member-head .sub { color: var(--muted); font-size: .9rem; }
+.territory-set { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 14px; margin: 14px 0; min-width: 0; }
+.territory-set legend { font-weight: 700; font-size: .95rem; padding: 0 4px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.check { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; white-space: nowrap; }
+.check input { width: 18px; height: 18px; }
+.mail-card { margin-top: 12px; }
+.mail-card .label { font-weight: 700; }
+
+/* 매뉴얼 근거 검색 */
+.ground-box { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin: 12px 0 16px; background: #fafbfc; }
+.result-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.result-list li { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.result-list li > input[type="checkbox"] { width: 20px; height: 20px; margin-top: 4px; flex: 0 0 auto; }
+.result-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.result-body .sub { color: var(--muted); font-size: .88rem; }
+.snippet { font-size: .9rem; overflow-wrap: anywhere; }
+.link-btn { background: none; border: none; padding: 0; color: var(--primary); font-weight: 700; text-align: left; cursor: pointer; text-decoration: underline; min-height: 28px; }
+.page-text { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; max-height: 55vh; overflow: auto; font-size: .88rem; font-family: ui-monospace, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.manual-item { border-top: 1px solid var(--line); padding: 14px 0; display: flex; flex-direction: column; gap: 10px; }
+.manual-item:first-of-type { border-top: none; }
+.manual-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.manual-head .sub { color: var(--muted); font-size: .9rem; margin-right: auto; }
+.toc ul { list-style: none; margin: 8px 0 0; padding: 0; max-height: 50vh; overflow: auto; }
+.toc li { padding: 2px 0; }
+.toc li.toc-1 { font-weight: 700; margin-top: 6px; }
+.toc li.toc-2 { padding-left: 1.2em; }
+.toc summary { cursor: pointer; font-weight: 700; min-height: 32px; }
+
+/* 푸터 — 화면구성.xlsx 푸터(회사 주소·대표전화·사업자번호·저작권), 수강생 확인 2026-09-29 「그대로 넣어주세요」 */
+.site-footer .footer-company { margin: 0 0 8px; line-height: 1.7; }
+.site-footer .footer-company span { display: block; }
+.site-footer .footer-copy { margin: 0 0 4px; font-size: .82rem; letter-spacing: .02em; }
+.site-footer .footer-note { margin: 0; font-size: .82rem; }
