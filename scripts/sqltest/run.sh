@@ -60,6 +60,10 @@ PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ROOT/supabase/schem
 SHARED_SQL="${SHARED_SQL:-$ROOT/supabase/2026-09-30_data0901_auth.sql}"
 echo "③-1 공용 개체 스텁 (www_profiles·www_admins·storage)"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ROOT/scripts/sqltest/05_shared_stub.local.sql"
+echo "③-1b 가드: 공용 개체가 있는 DB 에서는 schema.sql 이 멈춰야 한다"
+if PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ROOT/supabase/schema.sql" >/dev/null 2>&1; then
+  echo "실패: 공용 프로젝트에서 schema.sql 이 멈추지 않았습니다" >&2; exit 1
+fi
 echo "③-2 $(basename "$SHARED_SQL") 적용 · 재적용"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
