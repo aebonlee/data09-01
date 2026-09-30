@@ -206,13 +206,15 @@
   function clone(db) { return JSON.parse(JSON.stringify(db)); }
 
   // ── 신규 등록(기술지원1) ──────────────────────────────────────
-  function createRequest(db, form, user, now, files) {
+  // takenRefNos(선택): 이 db 에 없지만 이미 쓰인 번호 — 서버 로그인 때 남의 건이 안 보여도 번호가 겹치지 않게
+  //   (서버 data0901_last_ref_no() 가 돌려준 그날 마지막 번호를 넣습니다)
+  function createRequest(db, form, user, now, files, takenRefNos) {
     var v = validateRequest(form, db.sources);
     var a = validateAttachments(files);
     if (!v.ok || !a.ok) return { ok: false, errors: v.errors.concat(a.errors) };
     var fileNames = (files || []).map(fileName);
     var out = clone(db);
-    var refNo = nextRefNo(out.mains.map(function (m) { return m.ref_no; }), now);
+    var refNo = nextRefNo(out.mains.map(function (m) { return m.ref_no; }).concat(takenRefNos || []), now);
     var date = toDateStr(now);
     var src = findSource(out.sources, form.model);
     out.mains.push({
@@ -692,6 +694,28 @@
     }).sort(function (a, b) { return a.login_date < b.login_date ? 1 : -1; });
   }
 
+  // ── 첫 화면 지표 (2026-09-30 v0.8) ─────────────────────────────
+  // regId 를 주면 그 사람 건만(정비사), 없으면 전체(관리자). 화면에 숫자를 박지 않고 늘 기록에서 셉니다.
+  function kpis(db, regId, now) {
+    now = now || new Date();
+    var month = toDateStr(now).slice(0, 7);
+    var mains = db.mains.filter(function (m) { return !regId || m.reg_id === regId; });
+    var by = function (st) { return mains.filter(function (m) { return m.status === st; }).length; };
+    var refs = {};
+    mains.forEach(function (m) { refs[m.ref_no] = true; });
+    return {
+      total: mains.length, submitted: by(STATUS.SUBMITTED), answered: by(STATUS.ANSWERED), completed: by(STATUS.COMPLETED),
+      month: mains.filter(function (m) { return String(m.reg_date).slice(0, 7) === month; }).length,
+      replies: db.replies.filter(function (r) { return refs[r.ref_no]; }).length,
+      mails: (db.mails || []).filter(function (x) { return x.status === 'Pending'; }).length,
+      models: db.sources.length
+    };
+  }
+  function recentRequests(db, regId, n) {
+    return db.mains.filter(function (m) { return !regId || m.reg_id === regId; })
+      .sort(function (a, b) { return a.ref_no < b.ref_no ? 1 : -1; }).slice(0, n || 5);
+  }
+
   // ── 소스등록 ────────────────────────────────────────────────
   function upsertSource(db, src) {
     var model = String(src.model || '').trim();
@@ -817,7 +841,7 @@
     listTerritories: listTerritories, psRecipients: psRecipients, MAIL_REASON: MAIL_REASON, mailtoHref: mailtoHref,
     queueMail: queueMail, markMailSent: markMailSent, codeLabel: codeLabel, userOf: userOf,
     buildListRows: buildListRows, filterRows: filterRows, sessionMinutes: sessionMinutes,
-    formatDuration: formatDuration, buildLogRows: buildLogRows, upsertSource: upsertSource,
+    formatDuration: formatDuration, buildLogRows: buildLogRows, upsertSource: upsertSource, kpis: kpis, recentRequests: recentRequests,
     toCsv: toCsv, dbToSheets: dbToSheets, sheetsToDb: sheetsToDb
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -17,13 +17,23 @@
  *
  * 2026-09-30 강사 결정: 로그인은 공용 Supabase 의 구글·카카오(js/auth.js), 가입 뒤 기본 정보를 받고
  * 관리자가 승인합니다. 예전의 아이디 직접 가입은 없앴고, 예시 데이터 시연은 로그인 없이 예시 계정으로 합니다.
- * 기술지원 기록(등록·문의·회신·메일·Log)은 아직 이 브라우저(localStorage)에 둡니다 — 서버 이전은 다음 단계.
+ * 2026-09-30(v0.8) 기술지원 기록(등록·문의·회신·소스·메일·접속 Log)을 서버 표(data0901_*, js/server-db.js)에 둡니다.
+ *   서버로 로그인한 승인 회원: 서버 기록 — 정비사는 자기 건, 관리자는 모든 사람의 건·접속 Log 를 봅니다(RLS).
+ *   서버 표가 아직 없으면(대표가 SQL 을 실행하기 전): 알림 띠를 띄우고 예전처럼 이 브라우저에 저장합니다.
+ *   예시 데이터 시연(로그인 없음): 예전처럼 이 브라우저(localStorage)에만.
  */
 (function () {
   'use strict';
   var L = window.TSLogic, S = window.TSStore, M = window.TSManual, MS = window.TSManualStore;
-  var P = window.TSProfile, A = window.TSAuth, O = window.TSOriginals;
-  var db = S.loadDb();
+  var P = window.TSProfile, A = window.TSAuth, O = window.TSOriginals, SD = window.TSServerDb;
+  // localDb: 이 브라우저의 기록(시연·서버 표가 없을 때). db: 지금 화면이 보는 기록 — 서버 기록이 준비되면 서버 사본
+  var localDb = S.loadDb();
+  var db = localDb;
+  // 서버 기록 상태 — off(시연) | loading | ready | missing(서버 표 없음 → 이 브라우저에 저장) | error
+  // snap: 서버와 마지막으로 맞춘 db 사본(바뀐 것만 골라 보내는 기준), users: 서버 회원(이름·딜러 표시·메일 받는 사람)
+  var srv = { status: 'off', msg: '', snap: null, users: [] };
+  function serverOn() { return srv.status === 'ready'; }
+  function cloneDb(x) { return JSON.parse(JSON.stringify(x)); }
   var lang = S.getLang() || window.TSI18n.defaultLang(navigator.language);
   if (lang !== 'ko' && lang !== 'en') lang = 'ko';
   var t = window.TSI18n.make(lang);
@@ -66,7 +76,54 @@
     if (Array.isArray(c)) { c.forEach(function (x) { append(el, x); }); return; }
     el.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
   }
-  function save(newDb) { if (newDb) db = newDb; S.saveDb(db); }
+  // 이 브라우저에 저장(시연·서버 표가 없을 때). 서버 기록을 보는 중이면 화면 사본만 바꿉니다(저장은 commit).
+  function save(newDb) {
+    if (newDb) db = newDb;
+    if (serverOn()) return;
+    localDb = db; S.saveDb(db);
+  }
+  // 기술지원 기록 바꾸기 — 서버 기록이면 바뀐 것만 서버 표에 보내고, 성공해야 화면에 반영합니다. 결과: Promise<boolean>
+  var busyCount = 0;
+  function busy(on) {
+    busyCount += on ? 1 : -1;
+    document.body.classList.toggle('is-busy', busyCount > 0);
+  }
+  function commit(newDb) {
+    if (!serverOn()) { save(newDb); return Promise.resolve(true); }
+    var ops = SD.diff(srv.snap, newDb);
+    if (!ops.length) { db = newDb; return Promise.resolve(true); }
+    busy(true);
+    return SD.run(A.client(), ops).then(function () {
+      db = newDb; srv.snap = cloneDb(newDb);
+      // 메일 번호·받는 사람은 서버가 정하므로 메일을 건드렸으면 다시 읽습니다
+      if (ops.some(function (o) { return o.mails; })) return reloadMails();
+    }).then(function () { busy(false); return true; }, function (e) {
+      busy(false);
+      var dup = /23505|duplicate key/i.test(String(e && (e.code || '') + ' ' + e.message));
+      toast(dup ? t('srv_dup_ref') : t('srv_save_fail', { msg: String(e && e.message || e) }), true);
+      // 일부만 들어갔을 수 있으므로 서버를 다시 읽어 화면을 서버와 맞춥니다
+      return loadServer().then(function () { return false; });
+    });
+  }
+  function reloadMails() {
+    if (!isAdmin()) { db.mails = []; srv.snap.mails = []; return Promise.resolve(); }
+    return SD.loadMails(A.client()).then(function (rows) { db.mails = rows; srv.snap.mails = cloneDb(rows); });
+  }
+  // 서버 기록 읽기 — 표가 없으면 이 브라우저 기록으로 돌아갑니다(알림 띠)
+  function loadServer() {
+    if (!auth.user || !me()) { srv.status = 'off'; db = localDb; return Promise.resolve(); }
+    srv.status = 'loading';
+    return SD.load(A.client(), { admin: isAdmin() }).then(function (sdb) {
+      sdb.users = cloneDb(srv.users);
+      srv.status = 'ready'; srv.msg = ''; srv.snap = cloneDb(sdb); db = sdb;
+    }, function (e) {
+      srv.status = e && e.missing ? 'missing' : 'error';
+      srv.msg = String(e && e.message || e);
+      db = localDb;
+      srv.users.forEach(function (u) { upsertLocalUser(u); });
+      save();
+    });
+  }
   function now() { return new Date(); }
   function session() { return S.getSession(); }
   // 서버 로그인 사용자를 도구의 사용자 행 모양으로 (승인 전이면 approval 이 Pending)
@@ -81,11 +138,15 @@
   function terrLabel(code) { return P.territoryLabel(code, lang); }
   function kindLabel(kind) { return /service|정비/i.test(kind || '') ? t('kind_sm') : /operator|운전/i.test(kind || '') ? t('kind_om') : (kind || ''); }
   // 서버 회원을 로컬 사용자 목록에 둡니다(조회·상세의 이름·딜러, PS 메일 받는 사람 고르기에 씀)
-  function upsertLocalUser(u) {
+  function upsertInto(list, u) {
     var k = String(u.reg_id).toLowerCase();
     var i = -1;
-    db.users.forEach(function (x, j) { if (String(x.reg_id).toLowerCase() === k) i = j; });
-    if (i === -1) db.users.push(u); else db.users[i] = Object.assign({}, db.users[i], u);
+    list.forEach(function (x, j) { if (String(x.reg_id).toLowerCase() === k) i = j; });
+    if (i === -1) list.push(u); else list[i] = Object.assign({}, list[i], u);
+  }
+  function upsertLocalUser(u) {
+    if (auth.user) upsertInto(srv.users, u);   // 서버 회원은 서버 기록을 다시 읽어도 남도록 따로 둡니다
+    upsertInto(db.users, u);
   }
   function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
 
@@ -221,7 +282,8 @@
     var nav = document.getElementById('nav');
     nav.textContent = '';
     var u = me();
-    var items = [['request', 'nav_request'], ['list', 'nav_list'], ['manual', 'nav_manual']];
+    var items = u ? [['home', 'nav_home'], ['request', 'nav_request'], ['list', 'nav_list'], ['manual', 'nav_manual']]
+      : [['request', 'nav_request'], ['list', 'nav_list'], ['manual', 'nav_manual']];
     if (auth.user && u) items.push(['originals', 'nav_originals']); // 서버 승인 회원만(시연 계정은 서버 파일을 못 봄)
     if (L.isApprovedAdmin(u)) {
       // 서버 로그인 관리자의 승인 대기 수는 서버 목록(membersCache)에서, 시연은 로컬 사용자에서 셉니다
@@ -246,6 +308,16 @@
     var banner = document.getElementById('sampleBanner');
     banner.hidden = !db._sample;
     banner.textContent = t('sample_banner');
+    // 서버 기록 상태 띠 — 표가 아직 없거나(SQL 실행 전) 읽지 못했을 때만
+    var sb = document.getElementById('srvBanner');
+    sb.textContent = '';
+    sb.hidden = !(auth.user && me() && (srv.status === 'missing' || srv.status === 'error'));
+    if (!sb.hidden) {
+      sb.className = 'srv-banner ' + srv.status;
+      append(sb, [h('strong', null, t(srv.status === 'missing' ? 'srv_missing_title' : 'srv_error_title')), ' ',
+        h('span', null, srv.status === 'missing' ? t(isAdmin() ? 'srv_missing_admin' : 'srv_missing_user') : t('srv_error', { msg: srv.msg })), ' ',
+        h('button', { class: 'btn btn-small', type: 'button', onclick: function () { loadServer().then(render); } }, t('srv_retry'))]);
+    }
   }
 
   // 한/영 전환 (KO | EN) — 선택은 이 브라우저에 기억합니다(저장소가 막혀 있으면 이번 방문만)
@@ -260,21 +332,38 @@
   });
 
   // ── 로그인 ───────────────────────────────────────────────
-  // 접속 Log 는 이 브라우저에 남깁니다(로그인·로그아웃 시각). 서버 로그인도 처음 확인될 때 한 번 기록합니다.
+  // 접속 Log — 서버 기록이 준비된 로그인은 서버 표(data0901_access_log)에, 시연·서버 표가 없을 때는 이 브라우저에.
+  //   2026-09-30 수강생 지적: 브라우저에만 있으면 관리자는 자기 브라우저의 기록(=자기 것)만 봅니다.
+  //   서버 로그인도 처음 확인될 때 한 번 기록합니다(새로 고침마다 쌓이지 않게 세션에 표시).
   function startLog(regId, server) {
     var at = L.toDateTimeStr(now());
-    db.logs.push({ reg_id: regId, login_date: at, logout_date: '' });
-    save();
-    S.setSession({ reg_id: regId, login_date: at, server: !!server });
+    var sess = { reg_id: regId, login_date: at, server: !!server };
+    if (server && serverOn()) {
+      S.setSession(sess);
+      return SD.openLog(A.client(), regId).then(function (id) {
+        var cur = session();
+        if (cur && cur.reg_id === regId && cur.login_date === at) { cur.log_id = id; S.setSession(cur); }
+      }).catch(function (e) { toast(t('srv_log_fail', { msg: String(e && e.message || e) }), true); });
+    }
+    localDb.logs.push({ reg_id: regId, login_date: at, logout_date: '' });
+    S.saveDb(localDb);
+    S.setSession(sess);
+    return Promise.resolve();
   }
+  // 결과: Promise (서버 기록이면 로그아웃 시각을 채운 뒤 — 로그인 세션을 끊기 전에 보내야 합니다)
   function endLog() {
     var s = session();
-    if (!s) return;
-    for (var i = db.logs.length - 1; i >= 0; i--) {
-      var l = db.logs[i];
+    if (!s) return Promise.resolve();
+    if (s.server && s.log_id) {
+      return SD.closeLog(A.client(), s.log_id).catch(function () { /* 이미 닫혔거나 세션이 끊김 — 로그아웃은 계속 */ });
+    }
+    var logs = localDb.logs;
+    for (var i = logs.length - 1; i >= 0; i--) {
+      var l = logs[i];
       if (l.reg_id === s.reg_id && l.login_date === s.login_date && !l.logout_date) { l.logout_date = L.toDateTimeStr(now()); break; }
     }
-    save();
+    S.saveDb(localDb);
+    return Promise.resolve();
   }
   // 예시 데이터 시연 계정으로 들어가기 (이 브라우저 안에서만, 비밀번호 없음)
   // 결과: { ok, code } — 승인 대기·반려된 계정은 들어가지 못합니다(2026-09-29 수강생 답변)
@@ -287,16 +376,16 @@
   function resetAuth() {
     auth = { checked: true, user: null, profile: null, www: null, isAdmin: false, error: '' };
     serverManuals = []; serverManualState = { status: 'idle', k: 0, n: 0, msg: '' }; membersCache = null;
+    srv = { status: 'off', msg: '', snap: null, users: [] }; logsState = { status: 'idle', rows: [], msg: '' };
+    localDb = S.loadDb(); db = localDb;
     mergeManuals();
   }
   function logout() {
-    endLog();
-    S.setSession(null);
-    if (auth.user) {
-      A.signOut().then(function () { resetAuth(); go('#/login'); });
-      return;
-    }
-    go('#/login');
+    endLog().then(function () {
+      S.setSession(null);
+      if (auth.user) { A.signOut().then(function () { resetAuth(); go('#/login'); }); return; }
+      go('#/login');
+    });
   }
 
   // 서버 로그인 상태를 읽어 옵니다(첫 화면, 구글·카카오에서 돌아왔을 때, 기본 정보 저장 뒤)
@@ -308,7 +397,7 @@
     }).then(function (st) {
       auth.user = st.user; auth.profile = st.profile; auth.www = st.www; auth.isAdmin = st.isAdmin;
       auth.checked = true; auth.error = '';
-      afterAuth();
+      return afterAuth();
     }).catch(function (e) {
       auth.checked = true; auth.error = String(e && e.message || e);
     });
@@ -321,18 +410,27 @@
       return;
     }
     if (su && L.isApproved(su)) {
-      upsertLocalUser(su);
-      var s = session();
-      if (!s || !s.server || s.reg_id !== su.reg_id) { if (s) endLog(); startLog(su.reg_id, true); } else save();
+      upsertInto(srv.users, su);
       loadServerManuals();
-      if (isAdmin()) loadMembers(false);
+      // 관리자는 회원 목록(이름·딜러·메일 받는 사람)을 먼저 받고 서버 기록을 읽습니다
+      return (isAdmin() ? loadMembers(false) : Promise.resolve()).then(loadServer).then(function () {
+        upsertLocalUser(su);
+        var s = session();
+        if (!s || !s.server || s.reg_id !== su.reg_id) {
+          return (s ? endLog() : Promise.resolve()).then(function () { return startLog(su.reg_id, true); });
+        }
+        save();
+      });
     } else if (session()) {
-      endLog(); S.setSession(null); // 승인 전 서버 계정이면 예시 계정 세션은 닫습니다
+      return endLog().then(function () { S.setSession(null); }); // 승인 전 서버 계정이면 예시 계정 세션은 닫습니다
     }
   }
 
   function guard(needAdmin) {
     if (!auth.checked) { main.appendChild(h('div', { class: 'card' }, h('p', { class: 'note' }, t('login_checking')))); return false; }
+    if (auth.user && me() && (srv.status === 'loading' || srv.status === 'off')) {
+      main.appendChild(h('div', { class: 'card' }, h('p', { class: 'note' }, t('srv_loading')))); return false;
+    }
     if (!me()) {
       if (auth.user) { viewPending(); return false; }
       main.appendChild(h('div', { class: 'card' }, h('p', null, t('need_login')),
@@ -346,16 +444,21 @@
     return true;
   }
 
+  // 이 브라우저의 기록을 바꿉니다. 서버 기록을 보는 중이면 화면(db)은 그대로 두고 브라우저 쪽만.
+  function setLocal(nd) {
+    localDb = nd; S.saveDb(localDb);
+    if (!serverOn()) db = localDb;
+  }
   function loadSample(skipConfirm) {
     function doIt() {
-      db = window.TSSample.build(now());
+      var nd = window.TSSample.build(now());
       if (!auth.user) S.setSession(null);
-      else { var su = serverUser(); if (su && L.isApproved(su)) upsertLocalUser(su); }
-      save();
-      toast(t('data_loaded'));
-      go(auth.user ? '#/list' : '#/login');
+      else if (!serverOn()) srv.users.forEach(function (u) { upsertInto(nd.users, u); });
+      setLocal(nd);
+      toast(t(serverOn() ? 'data_loaded_local' : 'data_loaded'));
+      if (serverOn()) render(); else go(auth.user ? '#/list' : '#/login');
     }
-    var has = db.mains.length || db.users.length || db.sources.length;
+    var has = localDb.mains.length || localDb.users.length || localDb.sources.length;
     if (has && !skipConfirm) dialog(t('load_sample'), h('p', null, t('data_sample_confirm')),
       [{ label: t('btn_close'), value: 'close' }, { label: t('load_sample'), primary: true, onClick: doIt }]);
     else doIt();
@@ -363,7 +466,7 @@
 
   // ── 접속화면 — 구글·카카오 로그인 + 예시 데이터 시연 ────────────────
   function viewLogin() {
-    if (auth.user) { go(auth.profile ? (me() ? '#/request' : '#/profile') : '#/profile'); return; }
+    if (auth.user) { go(auth.profile ? (me() ? '#/home' : '#/profile') : '#/profile'); return; }
     var off = A.reason();
     var loginCard = h('div', { class: 'card' },
       h('h1', null, t('login_title')),
@@ -394,12 +497,13 @@
         return h('button', { class: 'btn', type: 'button', onclick: function () {
           var res = login(u.reg_id);
           if (!res.ok) { toast(t('login_' + res.code), true); return; }
-          go('#/request');
+          go('#/home');
         } },
           u.req_name + ' · ' + u.reg_id + (u.user_type === 'ADMIN' ? ' (ADMIN)' : ''),
           ap !== 'Approved' ? h('span', { class: 'status ' + (ap === 'Pending' ? 'red' : 'black'), style: 'margin-left:6px' }, t('approval_' + ap)) : null);
       })));
     }
+    main.appendChild(hero(false));
     main.appendChild(h('div', { class: 'login-wrap' }, loginCard, demo));
   }
   function oauthIcon(kind) {
@@ -415,6 +519,82 @@
     ] : [['#191919', 'M12 3C6.48 3 2 6.48 2 10.77c0 2.76 1.85 5.18 4.63 6.55l-1.18 4.33c-.1.38.33.68.66.46l5.15-3.4c.24.02.49.03.74.03 5.52 0 10-3.48 10-7.77S17.52 3 12 3z']];
     paths.forEach(function (p) { var el = document.createElementNS(ns, 'path'); el.setAttribute('fill', p[0]); el.setAttribute('d', p[1]); svg.appendChild(el); });
     return svg;
+  }
+
+  // ── 첫 화면 — 도구가 실제로 하는 흐름(등록 → 문의 → AI 매뉴얼 근거 답변 → 회신 → 완료) ─────────
+  // 그림은 지게차·매뉴얼·말풍선을 도형으로만 그린 것입니다(회사 로고를 흉내 내지 않음).
+  var HERO_ART = '<svg viewBox="0 0 360 250" role="img" aria-hidden="true" focusable="false">' +
+    '<defs><pattern id="hxgrid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M24 0H0V24" fill="none" stroke="currentColor" stroke-opacity=".10"/></pattern></defs>' +
+    '<rect width="360" height="250" fill="url(#hxgrid)"/>' +
+    '<line x1="12" y1="214" x2="348" y2="214" stroke="#8fa3bf" stroke-width="2"/>' +
+    // 팔레트와 짐
+    '<rect x="28" y="170" width="84" height="10" rx="2" fill="#8a6a3a"/><rect x="34" y="180" width="10" height="8" fill="#8a6a3a"/><rect x="66" y="180" width="10" height="8" fill="#8a6a3a"/><rect x="96" y="180" width="10" height="8" fill="#8a6a3a"/>' +
+    '<rect x="32" y="126" width="36" height="44" rx="3" fill="#dfe7f1"/><rect x="72" y="138" width="36" height="32" rx="3" fill="#c7d3e3"/>' +
+    // 마스트·포크
+    '<rect x="118" y="58" width="8" height="150" rx="2" fill="#c9d4e3"/><rect x="130" y="58" width="8" height="150" rx="2" fill="#c9d4e3"/>' +
+    '<rect x="26" y="186" width="104" height="6" rx="2" fill="#e8eef5"/><rect x="114" y="150" width="8" height="42" fill="#e8eef5"/>' +
+    // 차체·운전석 보호대·카운터웨이트
+    '<path d="M142 132h92l26 18v44H142z" fill="#f2a900"/><rect x="258" y="138" width="34" height="56" rx="6" fill="#d98f00"/>' +
+    '<path d="M156 132V70h70l14 62" fill="none" stroke="#e8eef5" stroke-width="6" stroke-linejoin="round"/>' +
+    '<rect x="184" y="108" width="26" height="24" rx="4" fill="#24364f"/><rect x="150" y="150" width="62" height="10" rx="3" fill="#24364f" opacity=".35"/>' +
+    // 바퀴
+    '<circle cx="172" cy="200" r="20" fill="#0b1626" stroke="#e8eef5" stroke-width="4"/><circle cx="172" cy="200" r="6" fill="#e8eef5"/>' +
+    '<circle cx="262" cy="200" r="20" fill="#0b1626" stroke="#e8eef5" stroke-width="4"/><circle cx="262" cy="200" r="6" fill="#e8eef5"/>' +
+    // 매뉴얼 근거 말풍선
+    '<path d="M238 18h98a10 10 0 0 1 10 10v44a10 10 0 0 1-10 10h-54l-16 14v-14h-28a10 10 0 0 1-10-10V28a10 10 0 0 1 10-10z" fill="#ffffff"/>' +
+    '<rect x="246" y="30" width="22" height="30" rx="2" fill="#1d4f91"/><path d="M251 38h12M251 44h12M251 50h8" stroke="#ffffff" stroke-width="2"/>' +
+    '<path d="M276 34h52M276 44h44M276 54h50M276 64h30" stroke="#8fa3bf" stroke-width="4" stroke-linecap="round"/>' +
+    '<circle cx="232" cy="92" r="4" fill="#f2a900"/><circle cx="220" cy="104" r="3" fill="#f2a900"/>' +
+    '</svg>';
+  var FLOW = [['flow_1', 'flow_1_d', '#/request'], ['flow_2', 'flow_2_d', '#/request'], ['flow_3', 'flow_3_d', '#/manual'],
+    ['flow_4', 'flow_4_d', '#/list'], ['flow_5', 'flow_5_d', '#/list']];
+  function hero(signedIn) {
+    var art = h('div', { class: 'hero-art' });
+    art.innerHTML = HERO_ART; // 고정 문자열(사용자 입력 없음)
+    var u = me();
+    return h('section', { class: 'hero' + (signedIn ? ' compact' : ''), 'aria-labelledby': 'heroTitle' },
+      h('div', { class: 'hero-grid' },
+        h('div', { class: 'hero-copy' },
+          h('p', { class: 'hero-eyebrow' }, h('span', { class: 'mono', 'aria-hidden': 'true' }, 'HX'), t('brand_company')),
+          h('h1', { id: 'heroTitle' }, signedIn && u ? t('home_hello', { name: u.req_name || u.reg_id }) : t('hero_title')),
+          h('p', { class: 'hero-lead' }, t(signedIn ? (isAdmin() ? 'home_lead_admin' : 'home_lead_user') : 'hero_lead')),
+          signedIn ? h('div', { class: 'btn-row' },
+            h('a', { class: 'btn btn-accent btn-big', href: '#/request' }, t('btn_new')),
+            h('a', { class: 'btn btn-on-dark btn-big', href: '#/list' }, t('nav_list'))) : null),
+        art),
+      h('ol', { class: 'flow', 'aria-label': t('flow_title') }, FLOW.map(function (f, i) {
+        var body = [h('span', { class: 'flow-n', 'aria-hidden': 'true' }, String(i + 1)),
+          h('span', { class: 'flow-t' }, t(f[0])), h('span', { class: 'flow-d' }, t(f[1]))];
+        return h('li', null, signedIn ? h('a', { href: f[2] }, body) : h('div', null, body));
+      })));
+  }
+  function viewHome() {
+    if (auth.checked && !auth.user && !me()) { viewLogin(); return; }
+    if (!guard()) return;
+    var admin = isAdmin(), u = me();
+    var k = L.kpis(db, admin ? null : u.reg_id, now());
+    var tiles = admin ? [
+      ['kpi_total', k.total, ''], ['kpi_submitted', k.submitted, 'red'], ['kpi_answered', k.answered, 'blue'], ['kpi_completed', k.completed, 'black'],
+      ['kpi_month', k.month, ''], ['kpi_mails', k.mails, k.mails ? 'red' : ''], ['kpi_models', k.models, '']
+    ] : [
+      ['kpi_mine', k.total, ''], ['kpi_wait', k.submitted, 'red'], ['kpi_todo', k.answered, 'blue'], ['kpi_completed', k.completed, 'black'], ['kpi_month', k.month, '']
+    ];
+    main.appendChild(hero(true));
+    main.appendChild(h('h2', { class: 'section-title' }, t(admin ? 'home_kpi_admin' : 'home_kpi_user')));
+    main.appendChild(h('div', { class: 'kpis' }, tiles.map(function (x) {
+      return h('div', { class: 'kpi' + (x[2] ? ' ' + x[2] : '') }, h('strong', null, String(x[1])), h('span', null, t(x[0])));
+    })));
+    if (!admin && k.answered) main.appendChild(h('div', { class: 'alert info' }, t('home_todo_note', { n: k.answered })));
+    var recent = L.recentRequests(db, admin ? null : u.reg_id, 5);
+    main.appendChild(h('div', { class: 'section-head' }, h('h2', { class: 'section-title' }, t('home_recent')),
+      h('a', { class: 'btn', href: '#/list' }, t('home_all'))));
+    if (!recent.length) { main.appendChild(h('div', { class: 'card' }, h('p', null, t('home_empty')), h('a', { class: 'btn btn-primary', href: '#/request' }, t('btn_new')))); return; }
+    main.appendChild(h('ul', { class: 'recent' }, recent.map(function (m) {
+      var q = L.latestInquiry(db, m.ref_no) || {};
+      return h('li', null, h('a', { href: '#/detail/' + m.ref_no },
+        statusBadge(m.status), h('strong', null, m.ref_no), h('span', { class: 'sub' }, L.displayDate(m.reg_date) + ' · ' + m.model + ' · ' + m.serial_no),
+        h('span', { class: 'recent-q' }, q.phenomenon || '')));
+    })));
   }
 
   // ── 기본 정보 입력(첫 로그인) · 내 정보 ────────────────────────────
@@ -465,7 +645,7 @@
         return refreshAuth().then(function () {
           var body = t(me() ? 'ob_saved' : 'ob_saved_pending') + (r.warnings.length ? ' ' + t('ob_www_warn') : '');
           afterRender = { title: t(first ? 'ob_title' : 'ob_edit_title'), body: body };
-          go(me() ? (first ? '#/request' : '#/profile') : '#/profile');
+          go(me() ? (first ? '#/home' : '#/profile') : '#/profile');
           if (!first) render();
         });
       }).catch(function (err) {
@@ -582,29 +762,49 @@
       e.preventDefault();
       attachPending.then(submit); // 영상 길이 확인이 끝난 뒤 제출합니다
     });
+    var submitBtn = form.querySelector('button[type=submit]');
     function submit() {
       var data = fd(form);
       var files = attachMeta;
-      var res = refNo ? L.addFollowUp(db, refNo, data, u, now(), files) : L.createRequest(db, data, u, now(), files);
-      if (!res.ok) {
-        showErrors(form, res.errors);
-        var modelErr = res.errors.filter(function (x) { return x.field === 'model' && x.code === 'model_not_registered'; })[0];
-        if (modelErr) {
-          dialog(t('model_popup_title'), h('p', null, t('model_popup_body', {
-            model: data.model.trim(), list: db.sources.map(function (s) { return s.model; }).join(', ') || '-'
-          })));
+      // 서버 기록이면 그날 마지막 번호를 먼저 받습니다(정비사는 남의 건이 안 보여도 번호가 겹치지 않게)
+      var pre = !refNo && serverOn() ? SD.lastRefNo(A.client(), L.toDateStr(now())) : Promise.resolve('');
+      submitBtn.disabled = true;
+      pre.then(function (last) {
+        var res = refNo ? L.addFollowUp(db, refNo, data, u, now(), files) : L.createRequest(db, data, u, now(), files, last ? [last] : []);
+        if (!res.ok) {
+          showErrors(form, res.errors);
+          var modelErr = res.errors.filter(function (x) { return x.field === 'model' && x.code === 'model_not_registered'; })[0];
+          if (modelErr) {
+            dialog(t('model_popup_title'), h('p', null, t('model_popup_body', {
+              model: data.model.trim(), list: db.sources.map(function (s) { return s.model; }).join(', ') || '-'
+            })));
+          }
+          return;
         }
-        return;
-      }
-      save(res.db);
-      toast(refNo ? t('followed_ok', { ref: res.ref_no, turn: res.s_turn }) : t('submitted_ok', { ref: res.ref_no }));
-      // 같은 모델·호기의 기 등록 건이 있으면 막지 않고 PS 담당자 검토 메일을 발송 대기 목록에 넣습니다
-      if (res.duplicates && res.duplicates.length) {
-        var q = L.queueMail(db, L.buildDupMail(db, res.ref_no, res.duplicates), now());
-        if (q.ok) save(q.db);
-        afterRender = { title: t('dup_title'), body: t('dup_user_note', { list: res.duplicates.join(', ') }) };
-      }
-      go('#/detail/' + res.ref_no);
+        return commit(res.db).then(function (ok) {
+          if (!ok) return;
+          toast(refNo ? t('followed_ok', { ref: res.ref_no, turn: res.s_turn }) : t('submitted_ok', { ref: res.ref_no }));
+          // 같은 모델·호기의 기 등록 건 — 서버 기록이면 남의 건까지 서버가 찾습니다(번호·상태·등록일만)
+          var dupRows = [];
+          var dupP = !refNo && serverOn()
+            ? SD.findDuplicates(A.client(), res.ref_no).then(function (rows) { dupRows = rows; return rows.map(function (r) { return r.ref_no; }); },
+                function () { return res.duplicates || []; })
+            : Promise.resolve(res.duplicates || []);
+          return dupP.then(function (dups) {
+            if (!dups.length) return;
+            // 막지 않고 PS 담당자 검토 메일을 발송 대기 목록에 넣습니다(메일 본문에는 보이지 않는 건의 번호·상태·등록일)
+            var view = cloneDb(db);
+            dupRows.forEach(function (r) {
+              if (!view.mains.some(function (m) { return m.ref_no === r.ref_no; })) view.mains.push({ ref_no: r.ref_no, status: r.status, reg_date: String(r.reg_date || '').slice(0, 10) });
+            });
+            var q = L.queueMail(db, L.buildDupMail(view, res.ref_no, dups), now());
+            afterRender = { title: t('dup_title'), body: t('dup_user_note', { list: dups.join(', ') }) };
+            if (q.ok) return commit(q.db);
+          }).then(function () { go('#/detail/' + res.ref_no); });
+        });
+      }).catch(function (e) {
+        toast(t('srv_save_fail', { msg: String(e && e.message || e) }), true);
+      }).then(function () { submitBtn.disabled = false; });
     }
 
     main.appendChild(h('div', { class: 'page-head' },
@@ -798,7 +998,7 @@
         closingData.complete_image = Array.prototype.map.call(photoInput.files, function (f) { return { name: f.name, type: f.type }; });
         var res = L.completeRequest(db, refNo, closingData, now());
         if (!res.ok) { showErrors(closeForm, res.errors); return; }
-        save(res.db); toast(t('completed_ok')); render();
+        commit(res.db).then(function (ok) { if (ok) { toast(t('completed_ok')); render(); } });
       });
       closing = h('div', { class: 'card close-card' }, h('h2', null, t('close_title')), h('p', { class: 'note' }, t('close_note')), closeForm);
     }
@@ -844,11 +1044,14 @@
         // 관리 지역 담당 관리자에게 보낼 메일을 발송 대기 목록에 넣습니다
         var mail = L.buildPsMail(db, refNo, p.reply_content);
         var q = L.queueMail(db, mail, now());
-        if (q.ok) save(q.db);
-        append(result, [
-          h('div', { class: 'alert warn' }, t('ai_cannot')),
-          mailCard(q.mail || mail, true)
-        ]);
+        (q.ok ? commit(q.db) : Promise.resolve(false)).then(function () {
+          // 서버 기록이면 번호·받는 사람이 서버에서 정해졌으므로 다시 읽은 대기 메일을 보여 줍니다
+          var saved = (db.mails || []).filter(function (x) { return x.ref_no === refNo && x.reason === 'cannot_answer' && x.status === 'Pending'; })[0];
+          append(result, [
+            h('div', { class: 'alert warn' }, t('ai_cannot')),
+            mailCard(saved || q.mail || mail, true)
+          ]);
+        });
         return;
       }
       var form = h('form', { class: 'form-grid', novalidate: true, style: 'margin-top:16px' },
@@ -863,7 +1066,7 @@
         e.preventDefault();
         var res = L.addReply(db, refNo, fd(form), now());
         if (!res.ok) { showErrors(form, res.errors); return; }
-        save(res.db); toast(t('ai_saved')); render();
+        commit(res.db).then(function (ok) { if (ok) { toast(t('ai_saved')); render(); } });
       });
       if (p.missing.length) result.appendChild(h('div', { class: 'alert info' }, t('ai_missing', { list: p.missing.join(', ') })));
       result.appendChild(form);
@@ -1336,8 +1539,9 @@
   function loadMembers(rerender) {
     return A.listMembers().then(function (rows) {
       membersCache = rows; membersError = '';
-      rows.forEach(function (p) { upsertLocalUser(P.toLocalUser(p, false)); }); // PS 메일 받는 사람 고르기에 씀
-      save();
+      // 이름·딜러 표시와 PS 메일 받는 사람 고르기에 씀. 서버 기록을 읽기 전이면 목록만 두고, 읽은 뒤에 붙입니다
+      rows.forEach(function (p) { upsertInto(srv.users, P.toLocalUser(p, false)); });
+      if (srv.status !== 'off' && srv.status !== 'loading') { srv.users.forEach(function (u) { upsertInto(db.users, u); }); save(); }
     }).catch(function (e) { membersError = String(e && e.message || e); })
       .then(function () { if (rerender !== false && /^#\/(members|list|request|detail|mails)/.test(location.hash || '')) render(); else renderHeader(currentRoute()); });
   }
@@ -1481,7 +1685,7 @@
         h('button', { class: 'btn', type: 'button', onclick: function () { copyText((to.length ? t('mail_to') + ': ' + to.join(', ') + '\n' : '') + mail.subject + '\n\n' + mail.body); } }, t('ps_copy')),
         !sent && mail.mail_id ? h('button', { class: 'btn', type: 'button', onclick: function () {
           var r = L.markMailSent(db, mail.mail_id, now());
-          if (r.ok) { save(r.db); toast(t('mail_marked')); render(); }
+          if (r.ok) commit(r.db).then(function (ok) { if (ok) { toast(t('mail_marked')); render(); } });
         } }, t('mail_mark_sent')) : null,
         compact ? h('a', { class: 'btn', href: '#/mails' }, t('nav_mails')) : null));
   }
@@ -1517,7 +1721,7 @@
       v.files = Array.prototype.map.call(fileInput.files, function (f) { return f.name; }).join('; ');
       var res = L.upsertSource(db, v);
       if (!res.ok) { showErrors(form, res.errors); return; }
-      save(res.db); toast(res.updated ? t('src_updated') : t('src_saved')); go('#/sources');
+      commit(res.db).then(function (ok) { if (ok) { toast(res.updated ? t('src_updated') : t('src_saved')); go('#/sources'); } });
     });
     var list = db.sources.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
       h('thead', null, h('tr', null, [t('f_model'), t('f_notebook'), t('f_files'), ''].map(function (x) { return h('th', null, x); }))),
@@ -1527,7 +1731,10 @@
           h('td', null, h('button', { class: 'btn btn-danger', type: 'button', onclick: function () {
             dialog(t('src_delete'), h('p', null, t('src_delete_confirm', { model: s.model })), [
               { label: t('btn_close'), value: 'close' },
-              { label: t('src_delete'), primary: true, onClick: function () { db.sources.splice(i, 1); save(); render(); } }]);
+              { label: t('src_delete'), primary: true, onClick: function () {
+                var nd = cloneDb(db); nd.sources.splice(i, 1);
+                commit(nd).then(function (ok) { if (ok) render(); });
+              } }]);
           } }, t('src_delete'))));
       })))) : h('p', { class: 'note' }, t('src_empty'));
     // 모델 ↔ 매뉴얼 대응표 엑셀(Manual Medel Name.xlsx 형식: model · notebook_name · 파일명) 한꺼번에 등록 — 2026-09-29 오후
@@ -1547,9 +1754,11 @@
             var u = L.upsertSource(cur, row);
             if (u.ok) { cur = u.db; if (u.updated) updated++; else added++; }
           });
-          save(cur);
-          afterRender = { title: t('src_map_title'), body: t('src_map_done', { added: added, updated: updated }) };
-          render();
+          commit(cur).then(function (ok) {
+            if (!ok) return;
+            afterRender = { title: t('src_map_title'), body: t('src_map_done', { added: added, updated: updated }) };
+            render();
+          });
         } catch (err) { toast(String(err && err.message || err), true); }
       };
       reader.readAsArrayBuffer(f);
@@ -1562,27 +1771,46 @@
   }
 
   // ── 접속Log ─────────────────────────────────────────────
+  // 서버 기록이면 data0901_access_log 전체(관리자 = 모든 회원, RLS)를 읽고, 아니면 이 브라우저의 기록을 보여 줍니다.
   var logFilter = null;
+  var logsState = { status: 'idle', rows: [], msg: '' };
+  function loadLogs() {
+    logsState = { status: 'loading', rows: [], msg: '' };
+    return SD.loadLogs(A.client()).then(function (rows) { logsState = { status: 'ok', rows: rows, msg: '' }; },
+      function (e) { logsState = { status: e && e.missing ? 'missing' : 'error', rows: [], msg: String(e && e.message || e) }; })
+      .then(function () { if (/^#\/logs/.test(location.hash)) render(); });
+  }
   function viewLogs() {
     if (!guard(true)) return;
+    var fromServer = serverOn();
+    if (fromServer && logsState.status === 'idle') { loadLogs(); }
+    var src = fromServer ? { logs: logsState.rows, users: db.users } : { logs: localDb.logs, users: localDb.users.concat(srv.users) };
     var f = logFilter || { from: '', to: '', user: '', dealer: '' };
-    var dealers = db.users.map(function (x) { return x.dealer; }).filter(function (d, i, a) { return d && a.indexOf(d) === i; });
+    var dealers = src.users.map(function (x) { return x.dealer; }).filter(function (d, i, a) { return d && a.indexOf(d) === i; });
+    var people = h('datalist', { id: 'logUsers' }, src.users.map(function (x) { return h('option', { value: x.reg_id }, x.req_name || null); }));
     var form = h('form', { class: 'card filters' },
       field(t('from'), h('input', { type: 'date', name: 'from', value: f.from })),
       field(t('to'), h('input', { type: 'date', name: 'to', value: f.to })),
-      field(t('log_user'), h('input', { name: 'user', value: f.user })),
+      field(t('log_user'), h('input', { name: 'user', value: f.user, list: 'logUsers', autocomplete: 'off' })), people,
       field(t('f_dealer'), codeSelect('dealer', dealers, f.dealer)),
       h('div', { class: 'btn-row' },
         h('button', { class: 'btn btn-primary', type: 'submit' }, t('search')),
         h('button', { class: 'btn', type: 'button', onclick: function () { logFilter = null; render(); } }, t('reset'))));
     form.querySelectorAll('select option[value=""]').forEach(function (o) { o.textContent = t('all'); });
     form.addEventListener('submit', function (e) { e.preventDefault(); logFilter = fd(form); render(); });
-    var rows = L.buildLogRows(db, f);
+    var rows = L.buildLogRows(src, f);
     var cols = [['req_name', 'f_req_name'], ['reg_id', 'f_reg_id'], ['country_cd', 'f_country'], ['dealer', 'f_dealer'],
       ['login_date', 'f_login'], ['logout_date', 'f_logout'], ['minutes', 'f_duration']];
-    main.appendChild(h('div', { class: 'page-head' }, h('h1', null, t('log_title'))));
+    var people_n = src.logs.map(function (l) { return String(l.reg_id).toLowerCase(); }).filter(function (x, i, a) { return a.indexOf(x) === i; }).length;
+    main.appendChild(h('div', { class: 'page-head' },
+      h('div', { style: 'margin-right:auto' }, h('h1', null, t('log_title')),
+        h('p', { class: 'note' }, t(fromServer ? 'log_src_server' : (auth.user ? 'log_src_local_srv' : 'log_src_local')))),
+      fromServer ? h('button', { class: 'btn', type: 'button', onclick: function () { loadLogs(); render(); } }, t('btn_refresh')) : null));
+    if (fromServer && logsState.status === 'loading') main.appendChild(h('div', { class: 'card' }, h('p', { class: 'note' }, t('srv_loading'))));
+    if (fromServer && (logsState.status === 'missing' || logsState.status === 'error')) main.appendChild(h('div', { class: 'alert warn' }, t('srv_error', { msg: logsState.msg })));
     main.appendChild(form);
-    main.appendChild(h('div', { class: 'list-meta' }, h('strong', null, rows.length + ' ' + t('rows'))));
+    main.appendChild(h('div', { class: 'list-meta' }, h('strong', null, rows.length + ' ' + t('rows')),
+      h('span', { class: 'note' }, t('log_people', { n: people_n }))));
     main.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
       h('thead', null, h('tr', null, cols.map(function (c) { return h('th', null, t(c[1])); }))),
       h('tbody', null, rows.map(function (r) {
@@ -1595,8 +1823,8 @@
 
   // ── 데이터 관리 ─────────────────────────────────────────
   function viewData() {
-    var counts = {};
-    Object.keys(L.emptyDb()).forEach(function (k) { counts[k] = db[k].length; });
+    var onServer = serverOn();
+    function countsOf(x) { var c = {}; Object.keys(L.emptyDb()).forEach(function (k) { c[k] = (x[k] || []).length; }); return c; }
     var fileInput = h('input', { type: 'file', accept: '.xlsx,.xls' });
     fileInput.addEventListener('change', function () {
       var f = fileInput.files[0];
@@ -1610,56 +1838,105 @@
             sheets[n.trim()] = XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' });
           });
           var res = L.sheetsToDb(sheets);
-          db = res.db;
-          if (/예시/.test(f.name)) db._sample = true;
-          S.setSession(null);
-          save();
-          var msg = t('data_imported', { list: res.report.read.join(', ') || '-' });
+          var nd = res.db;
+          if (/예시/.test(f.name)) nd._sample = true;
+          if (!auth.user) S.setSession(null);
+          setLocal(nd);
+          var msg = t(onServer ? 'data_imported_local' : 'data_imported', { list: res.report.read.join(', ') || '-' });
           render(); // render 가 대화상자를 닫으므로 결과 안내보다 먼저 그립니다
           dialog(t('data_import'), [h('p', null, msg)].concat(res.report.problems.map(function (p) { return h('p', { class: 'alert warn' }, p); })));
         } catch (err) { toast(String(err && err.message || err), true); }
       };
       reader.readAsArrayBuffer(f);
     });
-    function exportXlsx() {
-      var sheets = L.dbToSheets(db);
+    function exportXlsx(which) {
+      var src = which === 'local' ? localDb : db;
+      var sheets = L.dbToSheets(src);
       var wb = XLSX.utils.book_new();
       Object.keys(sheets).forEach(function (n) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheets[n]), n); });
       var out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
       // 시트 이름·머리행은 가져오기와 짝이 맞아야 하므로 언어와 무관하게 DB 필드명 그대로 둡니다
-      download(t('file_db') + '_' + L.toDateStr(now()) + (db._sample ? '_' + t('file_sample') : '') + '.xlsx',
+      download(t('file_db') + '_' + L.toDateStr(now()) + (which === 'server' ? '_' + t('file_server') : '') + (src._sample ? '_' + t('file_sample') : '') + '.xlsx',
         new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     }
     main.appendChild(h('div', { class: 'page-head' }, h('h1', null, t('data_title'))));
     if (!S.available()) main.appendChild(h('div', { class: 'alert warn' }, t('storage_fail')));
-    main.appendChild(h('div', { class: 'card' },
-      h('p', null, t('data_note')),
-      h('p', null, h('strong', null, t('data_counts', counts)), db._sample ? h('span', { class: 'status black', style: 'margin-left:8px' }, t('sample_badge')) : null),
+    if (onServer) {
+      main.appendChild(h('div', { class: 'card data-card server' },
+        h('h2', null, t('data_server_title')),
+        h('p', null, t(isAdmin() ? 'data_server_note_admin' : 'data_server_note_user')),
+        h('p', null, h('strong', null, t('data_counts', countsOf(db)))),
+        h('div', { class: 'btn-row' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { exportXlsx('server'); } }, t('data_export_server')))));
+      if (isAdmin()) main.appendChild(migrateCard());
+    }
+    var local = onServer ? localDb : db;
+    main.appendChild(h('div', { class: 'card data-card' },
+      onServer ? h('h2', null, t('data_local_title')) : null,
+      h('p', null, t(onServer ? 'data_local_note' : 'data_note')),
+      h('p', null, h('strong', null, t('data_counts', countsOf(local))), local._sample ? h('span', { class: 'status black', style: 'margin-left:8px' }, t('sample_badge')) : null),
       h('div', { class: 'btn-row' },
-        h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { loadSample(false); } }, t('load_sample')),
-        h('button', { class: 'btn', type: 'button', onclick: exportXlsx }, t('data_export')))));
+        h('button', { class: onServer ? 'btn' : 'btn btn-primary', type: 'button', onclick: function () { loadSample(false); } }, t('load_sample')),
+        h('button', { class: 'btn', type: 'button', onclick: function () { exportXlsx('local'); } }, t(onServer ? 'data_export_local' : 'data_export')))));
     main.appendChild(h('div', { class: 'card' },
-      h('h2', null, t('data_import')), h('p', { class: 'note' }, t('data_import_note')), fileInput));
+      h('h2', null, t('data_import')), h('p', { class: 'note' }, t(onServer ? 'data_import_note_srv' : 'data_import_note')), fileInput));
     main.appendChild(h('div', { class: 'card' },
       h('button', { class: 'btn btn-danger', type: 'button', onclick: function () {
-        dialog(t('data_clear'), h('p', null, t('data_clear_confirm')), [
+        dialog(t('data_clear'), h('p', null, t(onServer ? 'data_clear_confirm_srv' : 'data_clear_confirm')), [
           { label: t('btn_close'), value: 'close' },
-          { label: t('data_clear'), primary: true, onClick: function () { S.clearDb(); db = L.emptyDb(); toast(t('data_cleared')); go('#/login'); } }]);
-      } }, t('data_clear'))));
+          { label: t('data_clear'), primary: true, onClick: function () {
+            S.clearDb(); localDb = L.emptyDb();
+            if (!onServer) db = localDb;
+            toast(t('data_cleared'));
+            if (auth.user) render(); else go('#/login');
+          } }]);
+      } }, t(onServer ? 'data_clear_local' : 'data_clear'))));
+  }
+
+  // 관리자 — 이 브라우저에 쌓인 기록(서버 표가 생기기 전)을 서버로 한 번 올립니다.
+  // 서버에 이미 있는 등록번호는 등록 건 단위로 건너뜁니다. 예시 데이터는 올리지 않습니다. 접속 Log 는 옮기지 않습니다.
+  function migrateCard() {
+    var plan = SD.planMigration(localDb, srv.snap);
+    var n = plan.requests.length + plan.sources.length;
+    var card = h('div', { class: 'card data-card' }, h('h2', null, t('mig_title')), h('p', { class: 'note' }, t('mig_note')));
+    if (localDb._sample) { card.appendChild(h('p', { class: 'alert info' }, t('mig_sample'))); return card; }
+    card.appendChild(h('p', null, h('strong', null, t('mig_plan', {
+      requests: plan.requests.length, inquiries: plan.inquiries.length, replies: plan.replies.length,
+      sources: plan.sources.length, mails: plan.mails.length }))));
+    if (plan.skipped || plan.skippedSources) card.appendChild(h('p', { class: 'note' }, t('mig_skip', { requests: plan.skipped, sources: plan.skippedSources })));
+    if (plan.logs) card.appendChild(h('p', { class: 'note' }, t('mig_logs', { n: plan.logs })));
+    var btn = h('button', { class: 'btn btn-primary', type: 'button', disabled: !n, onclick: function () {
+      dialog(t('mig_title'), h('p', null, t('mig_confirm', { requests: plan.requests.length, sources: plan.sources.length })), [
+        { label: t('btn_close'), value: 'close' },
+        { label: t('mig_run'), primary: true, onClick: function () {
+          busy(true);
+          SD.migrate(A.client(), plan).then(function () { return loadServer(); }).then(function () {
+            busy(false);
+            afterRender = { title: t('mig_title'), body: t('mig_done', { requests: plan.requests.length, sources: plan.sources.length }) };
+            render();
+          }, function (e) { busy(false); toast(t('srv_save_fail', { msg: String(e && e.message || e) }), true); loadServer().then(render); });
+        } }]);
+    } }, t('mig_run'));
+    card.appendChild(h('div', { class: 'btn-row' }, btn));
+    if (!n) card.appendChild(h('p', { class: 'note' }, t('mig_nothing')));
+    return card;
   }
 
   // ── 라우터 ──────────────────────────────────────────────
-  function currentRoute() { return (location.hash.replace(/^#\/?/, '') || (me() ? 'request' : 'login')).split('/')[0]; }
+  var lastRoute = '';
+  function currentRoute() { return (location.hash.replace(/^#\/?/, '') || (me() ? 'home' : 'login')).split('/')[0]; }
   function render() {
-    var parts = (location.hash.replace(/^#\/?/, '') || (me() ? 'request' : 'login')).split('/');
+    var parts = (location.hash.replace(/^#\/?/, '') || (me() ? 'home' : 'login')).split('/');
     var route = parts[0], arg = parts[1] ? decodeURIComponent(parts[1]) : '';
     // 서버로 로그인했는데 기본 정보가 없으면 먼저 기본 정보를 받습니다(데이터 화면은 그대로 열어 둠)
     if (auth.checked && auth.user && !auth.profile && route !== 'data') route = 'profile';
+    if (route === 'logs' && lastRoute !== 'logs') logsState = { status: 'idle', rows: [], msg: '' }; // 들어올 때마다 새로 읽음
+    lastRoute = route;
     renderHeader(route);
     main.textContent = '';
     closeDialog();
     switch (route) {
       case 'login': viewLogin(); break;
+      case 'home': viewHome(); break;
       case 'request': viewRequest(arg); break;
       case 'list': viewList(); break;
       case 'detail': viewDetail(arg); break;
@@ -1686,7 +1963,7 @@
   render();
   // 서버 로그인 상태 확인(구글·카카오에서 돌아온 경우 포함) → 다시 그림
   refreshAuth().then(function () {
-    if (auth.user && /^(#\/?)?(login)?$/.test(location.hash)) location.hash = auth.profile ? (me() ? '#/request' : '#/profile') : '#/profile';
+    if (auth.user && /^(#\/?)?(login)?$/.test(location.hash)) location.hash = auth.profile ? (me() ? '#/home' : '#/profile') : '#/profile';
     else render();
     A.onChange(function (event, user) {
       var was = auth.user && auth.user.id, now2 = user && user.id;
