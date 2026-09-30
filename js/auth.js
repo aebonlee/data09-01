@@ -6,6 +6,7 @@
  *  - 회원: data0901_profiles (가입 → 기본 정보 입력 → 관리자 승인). 전 사이트 공용 www_profiles 에도
  *    이름·전화·이메일·가입 출처('hdx-ps')를 채웁니다(www 표준 OnboardingGate 와 같은 방식).
  *  - 매뉴얼: private 버킷 data0901-manuals 의 텍스트 색인(gzip JSON). 읽기 = 승인 회원, 쓰기 = 관리자.
+ *  - 제공 자료: 같은 버킷의 originals/ — 수강생이 준 원본 파일(기획서·엑셀·매뉴얼 PDF 등). 권한은 위와 같음.
  *
  * 접속 정보는 전 사이트 공통 공개 값(anon 키)입니다. 실제 보호는 서버의 RLS·Storage 정책이 합니다.
  * 파일로 열었을 때(file://)는 로그인하지 못하므로 서버 기능이 꺼지고 예시 데이터 시연만 됩니다.
@@ -131,7 +132,9 @@
   function canGzip() { return typeof root.CompressionStream === 'function' && typeof root.Response === 'function'; }
   function gzip(text) {
     var s = new root.Blob([text]).stream().pipeThrough(new root.CompressionStream('gzip'));
-    return new root.Response(s).blob();
+    // Response 가 돌려준 Blob 은 형식이 비어 있어 업로드(multipart)에서 application/octet-stream 으로 붙습니다.
+    // supabase-js 는 Blob 을 올릴 때 contentType 옵션 대신 Blob 의 형식을 쓰므로 여기서 형식을 붙입니다.
+    return new root.Response(s).blob().then(function (b) { return new root.Blob([b], { type: 'application/gzip' }); });
   }
   function gunzip(blob) {
     if (typeof root.DecompressionStream !== 'function') return Promise.reject(new Error('DecompressionStream'));
@@ -170,11 +173,71 @@
     return sb().storage.from(BUCKET).remove([name]).then(function (r) { if (r.error) fail(r.error); });
   }
 
+  // ── 제공 자료 원본 (Storage originals/) ─────────────────────
+  // 경로·목록 규칙은 js/originals.js. 읽기 = 승인 회원, 올리기·지우기 = 관리자(서버 정책).
+  var O = root.TSOriginals;
+  function readOriginalsIndex() {
+    return sb().storage.from(BUCKET).download(O.INDEX).then(function (r) {
+      if (r.error) return O.readIndex(null);   // 아직 목록 파일이 없으면 빈 목록
+      return r.data.text().then(O.readIndex);
+    }, function () { return O.readIndex(null); });
+  }
+  function writeOriginalsIndex(index) {
+    var body = new root.Blob([JSON.stringify(index)], { type: 'application/json' });
+    return sb().storage.from(BUCKET).upload(O.INDEX, body, { upsert: true, contentType: 'application/json', cacheControl: '0' })
+      .then(function (r) { if (r.error) fail(r.error); });
+  }
+  function listOriginals() {
+    return Promise.all([
+      sb().storage.from(BUCKET).list(O.PREFIX.replace(/\/$/, ''), { limit: 1000, sortBy: { column: 'name', order: 'asc' } }),
+      readOriginalsIndex()
+    ]).then(function (rs) {
+      if (rs[0].error) fail(rs[0].error);
+      return O.merge(rs[0].data || [], rs[1]);
+    });
+  }
+  // files: File 목록. note: 모두에 붙일 메모(출처 등). onEach(k, total, file) 로 진행을 알립니다.
+  // 결과: { done: [...], fails: [{ name, msg }] } — 다 올린 뒤 목록 파일을 한 번만 고쳐 씁니다.
+  function uploadOriginals(files, note, onEach) {
+    var done = [], fails = [], chain = Promise.resolve();
+    files.forEach(function (f, k) {
+      chain = chain.then(function () {
+        if (onEach) onEach(k + 1, files.length, f);
+        var key = O.keyOf(f.name), type = O.contentTypeOf(f.name, f.type);
+        // Blob 의 형식이 곧 올라가는 형식입니다(위 gzip 설명) — 확장자로 정한 형식을 붙인 사본으로 올립니다
+        var body = new root.Blob([f], { type: type });
+        return sb().storage.from(BUCKET).upload(key, body, { upsert: true, contentType: type, cacheControl: '3600' })
+          .then(function (r) {
+            if (r.error) fail(r.error);
+            done.push({ key: key, name: f.name, note: note || '', size: f.size, type: type, uploaded: new Date().toISOString().slice(0, 10) });
+          })
+          .catch(function (e) { fails.push({ name: f.name, msg: String(e && e.message || e) }); });
+      });
+    });
+    return chain.then(function () {
+      if (!done.length) return { done: done, fails: fails };
+      return readOriginalsIndex().then(function (ix) { return writeOriginalsIndex(O.withFiles(ix, done)); })
+        .then(function () { return { done: done, fails: fails }; });
+    });
+  }
+  function removeOriginal(key) {
+    return sb().storage.from(BUCKET).remove([key]).then(function (r) {
+      if (r.error) fail(r.error);
+      return readOriginalsIndex().then(function (ix) { return writeOriginalsIndex(O.withoutFiles(ix, [key])); });
+    });
+  }
+  // 내려받기 주소 — 10분 동안만 쓰는 서명 주소(원래 이름으로 저장되게 download 에 이름을 줌)
+  function originalUrl(key, name) {
+    return sb().storage.from(BUCKET).createSignedUrl(key, 600, { download: name || true })
+      .then(function (r) { if (r.error) fail(r.error); return r.data.signedUrl; });
+  }
+
   root.TSAuth = {
     SITE_ID: P.SITE_ID, BUCKET: BUCKET, reason: reason, enabled: function () { return !reason(); },
     redirectTo: redirectTo, cleanUrl: cleanUrl, signIn: signIn, signOut: signOut, getUser: getUser, onChange: onChange,
     loadState: loadState, saveProfile: saveProfile, listMembers: listMembers, updateMember: updateMember,
     objectName: objectName, listManuals: listManuals, downloadManual: downloadManual, uploadManual: uploadManual,
-    removeManual: removeManual
+    removeManual: removeManual,
+    listOriginals: listOriginals, uploadOriginals: uploadOriginals, removeOriginal: removeOriginal, originalUrl: originalUrl
   };
 })(window);

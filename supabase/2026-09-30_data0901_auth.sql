@@ -210,9 +210,9 @@ insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_typ
 values ('data0901-manuals', 'data0901-manuals', false, 52428800,
         array['application/gzip', 'application/json'])
 on conflict (id) do update
-  set public = false,
-      file_size_limit = excluded.file_size_limit,
-      allowed_mime_types = excluded.allowed_mime_types;
+  set public = false;
+-- 이미 있는 버킷의 크기·형식 제한은 건드리지 않습니다 — 2026-09-30_data0901_originals.sql 이 넓힌 제한을
+-- 이 파일을 다시 실행해도 좁히지 않게(두 파일을 어느 순서로 몇 번 실행해도 결과가 같게)
 
 drop policy if exists data0901_manuals_read on storage.objects;
 create policy data0901_manuals_read on storage.objects

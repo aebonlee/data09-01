@@ -11,8 +11,16 @@ https://hdx-ps.jobability.co.kr/ 의 구글·카카오 로그인 회원·승인�
 | `data0901_guard_profile()` | 트리거 — 가입은 늘 승인 대기로, 승인·권한·관리 지역은 관리자만 바꿈(관리자가 자기 권한을 스스로 내리는 것도 막음) |
 | 버킷 `data0901-manuals` (private) | 매뉴얼 쪽별 텍스트 색인(`*.manual.json.gz`). 읽기 = 승인 회원, 올리기·지우기 = 관리자 |
 
+### 추가 — `2026-09-30_data0901_originals.sql` (「제공 자료」 원본, 강사 실행)
+
+auth SQL 다음에 한 번 실행합니다(재실행 안전, 두 파일을 어느 순서로 다시 돌려도 결과 같음). 같은 버킷 `data0901-manuals` 의 **올릴 수 있는 형식·크기만** 넓힙니다 — gzip·json → + PDF·Word·Excel·PowerPoint·한글·zip·사진·영상·CSV/텍스트·octet-stream(27종), 한 파일 50MB → 100MB. 원본은 `originals/` 아래, 원래 이름은 `originals/_index.json`. **정책은 새로 만들지 않습니다** — 위 Storage 정책 4개가 버킷 전체(경로 제한 없음)에 걸려 있어 읽기 = 승인 회원, 쓰기 = 관리자가 그대로 적용됩니다. 프로젝트 전체 파일 한도(Dashboard → Storage → Settings)가 50MB 면 그보다 큰 파일(100D-9V SM ENG.pdf 55MB)은 거기서 막힙니다.
+
+### 추가 — `2026-09-30_data0901_student_admin.sql` (수강생 관리자 지정)
+
+`noja2178@gmail.com` 이 가입·기본 정보 저장을 마친 뒤 실행하면 `data0901_profiles` 그 한 행만 승인 ADMIN(관리 지역 국내 5개 + Direct Sales)으로 바꿉니다. 가입 전·기본 정보 전이면 아무것도 바꾸지 않고 안내만 냅니다. `www_*`·`user_profiles` 등 다른 공용 개체는 건드리지 않습니다(하네스가 확인). 화면 「회원 관리」에서 해도 같습니다.
+
 - 비로그인(anon)은 회원 표·판정 함수·매뉴얼 파일 모두 막혀 있습니다. 공용 `www_profiles`·`www_admins` 는 읽기만 하고 구조를 바꾸지 않습니다.
-- 검증: `./scripts/sqltest/run.sh` — 임시 로컬 PostgreSQL 에 공용 개체 스텁(`scripts/sqltest/05_shared_stub.local.sql`)을 깔고 적용해 권한을 확인합니다(`30_data0901_shared.local.sql`).
+- 검증: `./scripts/sqltest/run.sh` — 임시 로컬 PostgreSQL 에 공용 개체 스텁(`scripts/sqltest/05_shared_stub.local.sql`)을 깔고 적용해 권한을 확인합니다(`30_data0901_shared.local.sql`, 원본 `35_data0901_originals.local.sql`, 관리자 지정 `36_data0901_student_admin.local.sql`).
 
 ## 수강생 본인 프로젝트용 — `schema.sql`
 

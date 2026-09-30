@@ -13,6 +13,7 @@
  *   #/mails            PS 메일 발송 대기 (Admin: AI 답변 불가·중복 등록 건)              — 2026-09-29
  *   #/profile          기본 정보 입력(첫 로그인)·내 정보                                   — 2026-09-30
  *   #/manual-admin     매뉴얼 등록 (Admin: 서버 비공개 저장소에 매뉴얼 텍스트 색인 올리기)    — 2026-09-30
+ *   #/originals        제공 자료 (승인 회원: 원본 내려받기 / Admin: 원본 올리기·지우기)         — 2026-09-30
  *
  * 2026-09-30 강사 결정: 로그인은 공용 Supabase 의 구글·카카오(js/auth.js), 가입 뒤 기본 정보를 받고
  * 관리자가 승인합니다. 예전의 아이디 직접 가입은 없앴고, 예시 데이터 시연은 로그인 없이 예시 계정으로 합니다.
@@ -21,7 +22,7 @@
 (function () {
   'use strict';
   var L = window.TSLogic, S = window.TSStore, M = window.TSManual, MS = window.TSManualStore;
-  var P = window.TSProfile, A = window.TSAuth;
+  var P = window.TSProfile, A = window.TSAuth, O = window.TSOriginals;
   var db = S.loadDb();
   var lang = S.getLang() || window.TSI18n.defaultLang(navigator.language);
   if (lang !== 'ko' && lang !== 'en') lang = 'ko';
@@ -221,6 +222,7 @@
     nav.textContent = '';
     var u = me();
     var items = [['request', 'nav_request'], ['list', 'nav_list'], ['manual', 'nav_manual']];
+    if (auth.user && u) items.push(['originals', 'nav_originals']); // 서버 승인 회원만(시연 계정은 서버 파일을 못 봄)
     if (L.isApprovedAdmin(u)) {
       // 서버 로그인 관리자의 승인 대기 수는 서버 목록(membersCache)에서, 시연은 로컬 사용자에서 셉니다
       var pendingUsers = auth.user ? (membersCache || []).filter(function (x) { return x.approval === 'Pending'; }).length
@@ -1165,15 +1167,21 @@
     main.appendChild(h('div', { class: 'page-head' },
       h('div', { style: 'margin-right:auto' }, h('h1', null, t('mreg_title')), h('p', { class: 'note' }, t('mreg_sub')))));
     var status = h('p', { class: 'note', 'aria-live': 'polite' });
+    var picked = h('p', { class: 'mreg-picked', id: 'mregPicked', 'aria-live': 'polite' });
     var jsonInput = h('input', { type: 'file', accept: '.json,application/json', multiple: true });
     var pdfInput = h('input', { type: 'file', accept: '.pdf,application/pdf', multiple: true });
-    function finish(done, fails) {
-      mregList = null; serverManualPromise = null; loadServerManuals(true);
-      afterRender = { title: t('mreg_title'), body: [t('mreg_done', { n: done })].concat(fails).join('\n') };
-      render();
+    function finish(done, fails, total) {
+      serverManualPromise = null; loadServerManuals(true);
+      // 목록을 먼저 받아 두고 결과 대화상자를 띄웁니다 — 목록을 받은 뒤 다시 그리면 열린 대화상자가 닫히기 때문
+      A.listManuals().then(function (objs) { mregList = objs; mregError = ''; }, function (e) { mregList = null; mregError = String(e && e.message || e); })
+        .then(function () {
+          afterRender = { title: t('mreg_title'), body: [t('mreg_done', { n: done, total: total })].concat(fails).join('\n') };
+          if (location.hash === '#/manual-admin') render();
+        });
     }
     function uploadAll(items, readOne) {
       jsonInput.disabled = pdfInput.disabled = true;
+      picked.textContent = t('mreg_selected', { n: items.length });
       var done = 0, fails = [], chain = Promise.resolve();
       items.forEach(function (f, k) {
         chain = chain.then(function () {
@@ -1185,7 +1193,7 @@
             .catch(function (e) { fails.push(t('mreg_fail', { name: f.name, msg: String(e && e.message || e) })); });
         });
       });
-      chain.then(function () { finish(done, fails); });
+      chain.then(function () { finish(done, fails, items.length); });
     }
     jsonInput.addEventListener('change', function () {
       var files = Array.prototype.slice.call(jsonInput.files);
@@ -1208,7 +1216,8 @@
         h('div', { class: 'field' }, h('span', null, t('mreg_json')), jsonInput, h('small', { class: 'note' }, t('mreg_json_note'))),
         h('div', { class: 'field' }, h('span', null, t('mreg_pdf')), pdfInput, h('small', { class: 'note' }, t('mreg_pdf_note')))),
       typeof window.CompressionStream !== 'function' ? h('p', { class: 'alert warn' }, t('mreg_no_gzip')) : null,
-      status));
+      picked, status,
+      h('p', { class: 'note' }, t('mreg_originals_hint'), ' ', h('a', { href: '#/originals' }, t('nav_originals')))));
 
     var listCard = h('div', { class: 'card' });
     main.appendChild(listCard);
@@ -1236,6 +1245,88 @@
                   .catch(function (e) { toast(t('auth_error', { msg: String(e && e.message || e) }), true); });
               } }]);
           } }, t('manual_remove'))));
+      })))));
+  }
+
+  // ── 제공 자료 (원본) ─────────────────────────────────────────
+  // 수강생이 준 원본 파일(기획서·DB 엑셀·화면구성·매뉴얼 PDF 등)을 비공개 버킷 originals/ 에 둡니다.
+  // 승인 회원 = 목록·내려받기(10분짜리 서명 주소), 관리자 = 올리기·지우기. 권한은 서버 정책이 막습니다.
+  var origList = null, origError = '';
+  function viewOriginals() {
+    if (!guard()) return;
+    main.appendChild(h('div', { class: 'page-head' },
+      h('div', { style: 'margin-right:auto' }, h('h1', null, t('orig_title')), h('p', { class: 'note' }, t('orig_sub')))));
+    if (!auth.user) { main.appendChild(h('div', { class: 'card' }, h('p', null, t('orig_need_server')))); return; }
+
+    if (isServerAdmin()) {
+      var picked = h('p', { class: 'mreg-picked', id: 'origPicked', 'aria-live': 'polite' });
+      var status = h('p', { class: 'note', 'aria-live': 'polite' });
+      var noteInput = h('input', { type: 'text', name: 'orig_note', maxlength: '80', placeholder: t('orig_note_ph') });
+      var fileInput = h('input', { type: 'file', id: 'origFiles', multiple: true });
+      fileInput.addEventListener('change', function () {
+        var files = Array.prototype.slice.call(fileInput.files);
+        if (!files.length) return;
+        var total = files.reduce(function (a, f) { return a + (f.size || 0); }, 0);
+        picked.textContent = t('orig_selected', { n: files.length, size: O.fmtSize(total) });
+        fileInput.disabled = noteInput.disabled = true;
+        A.uploadOriginals(files, noteInput.value.trim(), function (k, n, f) {
+          status.textContent = t('orig_uploading', { k: k, total: n, name: f.name });
+        }).then(function (r) {
+          // 목록을 먼저 받아 두고 결과 대화상자를 띄웁니다(목록을 받은 뒤 다시 그리면 대화상자가 닫힘)
+          return A.listOriginals().then(function (rows) { origList = rows; origError = ''; }, function (e) { origList = null; origError = String(e && e.message || e); })
+            .then(function () {
+              afterRender = { title: t('orig_title'), body: [t('orig_done', { n: r.done.length, total: files.length })]
+                .concat(r.fails.map(function (x) { return t('orig_fail', { name: x.name, msg: x.msg }); })).join('\n') };
+              if (location.hash === '#/originals') render();
+            });
+        }).catch(function (e) {
+          fileInput.disabled = noteInput.disabled = false;
+          status.textContent = t('auth_error', { msg: String(e && e.message || e) });
+        });
+      });
+      main.appendChild(h('div', { class: 'card' },
+        h('h2', null, t('orig_upload')),
+        h('div', { class: 'form-grid' },
+          h('div', { class: 'field' }, h('span', null, t('orig_files')), fileInput, h('small', { class: 'note' }, t('orig_files_note'))),
+          h('label', { class: 'field' }, h('span', null, t('orig_note')), noteInput)),
+        picked, status));
+    }
+
+    var listCard = h('div', { class: 'card', id: 'origListCard' });
+    main.appendChild(listCard);
+    if (origError) listCard.appendChild(h('p', { class: 'alert warn' }, t('auth_error', { msg: origError })));
+    if (!origList) {
+      listCard.appendChild(h('p', { class: 'note' }, t('orig_loading')));
+      A.listOriginals().then(function (rows) { origList = rows; origError = ''; })
+        .catch(function (e) { origList = []; origError = String(e && e.message || e); })
+        .then(function () { if (location.hash === '#/originals') render(); });
+      return;
+    }
+    var totalSize = origList.reduce(function (a, x) { return a + (x.size || 0); }, 0);
+    listCard.appendChild(h('h2', null, t('orig_list', { n: origList.length, size: O.fmtSize(totalSize) })));
+    if (!origList.length) { listCard.appendChild(h('p', { class: 'note' }, t('orig_empty'))); return; }
+    listCard.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
+      h('thead', null, h('tr', null, h('th', null, t('orig_col_name')), h('th', null, t('orig_note')),
+        h('th', null, t('orig_col_size')), h('th', null, t('orig_col_date')), h('th', null, ''))),
+      h('tbody', null, origList.map(function (o) {
+        return h('tr', null,
+          h('td', null, o.name), h('td', null, o.note), h('td', { class: 'nowrap' }, O.fmtSize(o.size)),
+          h('td', { class: 'nowrap' }, o.updated),
+          h('td', { class: 'nowrap' },
+            h('button', { class: 'btn', type: 'button', onclick: function (ev) {
+              var btn = ev.currentTarget; btn.disabled = true;
+              A.originalUrl(o.key, o.name).then(function (url) { window.location.assign(url); })
+                .catch(function (e) { toast(t('auth_error', { msg: String(e && e.message || e) }), true); })
+                .then(function () { btn.disabled = false; });
+            } }, t('orig_download')),
+            isServerAdmin() ? h('button', { class: 'btn btn-danger', type: 'button', onclick: function () {
+              dialog(t('manual_remove'), h('p', null, t('orig_remove_confirm', { name: o.name })), [
+                { label: t('btn_close'), value: 'close' },
+                { label: t('manual_remove'), primary: true, onClick: function () {
+                  A.removeOriginal(o.key).then(function () { origList = null; render(); })
+                    .catch(function (e) { toast(t('auth_error', { msg: String(e && e.message || e) }), true); });
+                } }]);
+            } }, t('manual_remove')) : null));
       })))));
   }
 
@@ -1580,6 +1671,7 @@
       case 'mails': viewMails(); break;
       case 'profile': viewProfile(); break;
       case 'manual-admin': viewManualAdmin(); break;
+      case 'originals': viewOriginals(); break;
       default: viewLogin();
     }
     if (afterRender) {

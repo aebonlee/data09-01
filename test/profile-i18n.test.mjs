@@ -71,8 +71,9 @@ test('기본 언어: 브라우저가 한국어면 KO, 그 밖에는 EN', () => {
 });
 test('끼워 넣기 동작', () => {
   const t = I.make('en');
-  assert.equal(t('mreg_done', { n: 18 }), '18 manual(s) registered.');
-  assert.equal(I.make('ko')('mreg_done', { n: 18 }), '매뉴얼 18개를 등록했습니다.');
+  assert.equal(t('mreg_done', { n: 17, total: 18 }), '17 of 18 manual(s) registered.');
+  assert.equal(I.make('ko')('mreg_done', { n: 18, total: 18 }), '매뉴얼 18개 중 18개를 등록했습니다.');
+  assert.equal(I.make('ko')('orig_selected', { n: 25, size: '410.2 MB' }), '파일 25개(410.2 MB)를 골랐습니다. 차례로 올립니다.');
 });
 
 test('접속 유지 시간 표기가 화면 언어를 따른다', () => {

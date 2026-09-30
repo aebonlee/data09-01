@@ -67,6 +67,14 @@ fi
 echo "③-2 $(basename "$SHARED_SQL") 적용 · 재적용"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
+# 제공 자료 원본(originals/) — 버킷 제한을 넓히는 추가 스크립트. auth SQL 을 사이에 다시 돌려도
+# 넓힌 제한이 좁아지지 않는지까지 본다. ORIG_SQL 로 일부러 깨뜨린 사본을 넣을 수 있다.
+ORIG_SQL="${ORIG_SQL:-$ROOT/supabase/2026-09-30_data0901_originals.sql}"
+echo "③-3 $(basename "$ORIG_SQL") 적용 → auth SQL 재실행 → 재적용 → auth SQL 재실행"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ORIG_SQL"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ORIG_SQL"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
 
 echo "④ 공통 불변식 검증"
 "${PSQL[@]}" -f "$ROOT/scripts/sqltest/10_common.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
@@ -78,6 +86,12 @@ fi
 
 echo "⑥ 공용 프로젝트(data0901_) 검증"
 "${PSQL[@]}" -f "$ROOT/scripts/sqltest/30_data0901_shared.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
+
+echo "⑦ 제공 자료 원본(originals/) 검증"
+"${PSQL[@]}" -f "$ROOT/scripts/sqltest/35_data0901_originals.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
+
+echo "⑧ 수강생 관리자 지정 SQL 검증"
+"${PSQL[@]}" -f "$ROOT/scripts/sqltest/36_data0901_student_admin.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
 
 echo ""
 echo "SQL 검증 통과."
