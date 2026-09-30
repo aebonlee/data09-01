@@ -3,29 +3,40 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI 기술지원 — 지게차 현장 기술지원 접수·조회</title>
-  <meta name="description" content="현장 정비사의 기술 문의를 정형 양식으로 접수하고, 매뉴얼 기반 AI 회신을 붙여 넣어 기준번호별로 쌓는 브라우저용 기술지원 도구(1단계 시연판)">
-  <meta name="robots" content="noindex">
+  <title>AI 기술지원 · AI Tech Support — 지게차 현장 기술지원</title>
+  <meta name="description" content="지게차 현장 정비사의 기술 문의를 정형 양식으로 접수하고 모델별 매뉴얼 근거로 AI 1차 회신, 미해결 건은 PS 담당자에게 넘기는 기술지원 플랫폼(한국어/English). 구글·카카오 로그인 후 관리자 승인.">
+  <!-- 회원 전용 업무 도구라 검색 노출은 막습니다(링크 공유 미리보기는 OG 로 뜸) -->
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="canonical" href="https://hdx-ps.jobability.co.kr/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="AI 기술지원 · AI Tech Support">
+  <meta property="og:url" content="https://hdx-ps.jobability.co.kr/">
+  <meta property="og:title" content="AI 기술지원 · AI Tech Support — 지게차 현장 기술지원">
+  <meta property="og:description" content="현장 기술 문의 접수 · 매뉴얼 근거 AI 회신 · PS 담당자 연계. 한국어/English, 구글·카카오 로그인.">
+  <meta property="og:image" content="https://hdx-ps.jobability.co.kr/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="ko_KR">
+  <meta property="og:locale:alternate" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://hdx-ps.jobability.co.kr/og-image.png">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <a class="skip" href="#main">본문으로 건너뛰기</a>
+  <a class="skip" href="#main" data-t="skip">본문으로 건너뛰기</a>
   <header class="site-header">
     <div class="inner header-inner">
       <a class="brand" href="#/list">
         <span class="brand-name" data-t="brand">AI 기술지원</span>
         <span class="brand-sub" data-t="brandSub">지게차 현장 기술지원 접수·조회</span>
       </a>
-      <nav class="nav" id="nav" aria-label="주 메뉴"></nav>
+      <nav class="nav" id="nav" aria-label="주 메뉴" data-t-attr="aria-label:nav_label"></nav>
       <div class="header-tools">
-        <label class="lang">
-          <span class="sr" data-t="lang">언어</span>
-          <select id="langSelect" aria-label="언어">
-            <option value="ko">한글</option>
-            <option value="en">English</option>
-          </select>
-        </label>
+        <div class="lang-toggle" role="group" aria-label="화면 언어" data-t-attr="aria-label:lang_toggle">
+          <button type="button" value="ko" lang="ko" aria-pressed="true">KO</button>
+          <button type="button" value="en" lang="en" aria-pressed="false">EN</button>
+        </div>
         <span id="whoami" class="whoami"></span>
         <button type="button" id="authBtn" class="btn btn-ghost"></button>
       </div>
@@ -55,18 +66,22 @@
       <h2 id="dialogTitle"></h2>
       <div id="dialogContent"></div>
       <div class="dialog-actions" id="dialogActions">
-        <button class="btn" value="close">닫기</button>
+        <button class="btn" value="close" data-t="btn_close">닫기</button>
       </div>
     </form>
   </dialog>
 
   <!-- 로컬 파일(file://)로 열어도 돌도록 module 이 아닌 일반 스크립트로 불러옵니다.
-       pdf.js(vendor/pdfjs)는 「매뉴얼 근거」 화면에서 PDF 를 불러올 때만 읽어 들입니다. -->
+       pdf.js(vendor/pdfjs)는 「매뉴얼 근거」 화면에서 PDF 를 불러올 때만 읽어 들입니다.
+       supabase-js(vendor/supabase, 2.116.0 UMD)는 구글·카카오 로그인·회원·매뉴얼 보관에 씁니다. -->
   <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/supabase/supabase.js"></script>
   <script src="js/logic.js"></script>
   <script src="js/manual.js"></script>
   <script src="js/manual-store.js"></script>
   <script src="js/i18n.js"></script>
+  <script src="js/profile.js"></script>
+  <script src="js/auth.js"></script>
   <script src="js/sample-data.js"></script>
   <script src="js/store.js"></script>
   <script src="js/app.js"></script>

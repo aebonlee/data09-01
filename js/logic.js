@@ -663,9 +663,11 @@
     if (!a || !b || b < a) return null;
     return Math.round((b - a) / 60000);
   }
-  function formatDuration(min) {
+  // lang 'en' 이면 영어 표기(2026-09-30 한/영 화면)
+  function formatDuration(min, lang) {
     if (min == null) return '';
     var h = Math.floor(min / 60), m = min % 60;
+    if (lang === 'en') return (h ? h + ' h ' : '') + m + ' min';
     return (h ? h + '시간 ' : '') + m + '분';
   }
   function buildLogRows(db, f) {

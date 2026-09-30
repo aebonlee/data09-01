@@ -233,3 +233,20 @@ table.list td.nowrap { white-space: nowrap; }
 .site-footer .footer-company span { display: block; }
 .site-footer .footer-copy { margin: 0 0 4px; font-size: .82rem; letter-spacing: .02em; }
 .site-footer .footer-note { margin: 0; font-size: .82rem; }
+
+/* ── 2026-09-30 한/영 전환 · 구글·카카오 로그인 ── */
+.lang-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.lang-toggle button {
+  min-width: 44px; min-height: 36px; padding: 4px 10px; border: 0; background: var(--surface); color: var(--text);
+  font: inherit; font-weight: 700; cursor: pointer;
+}
+.lang-toggle button + button { border-left: 1px solid var(--line); }
+.lang-toggle button[aria-pressed="true"] { background: var(--primary); color: var(--on-primary); }
+.lang-toggle button:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.oauth-buttons { display: flex; flex-direction: column; gap: 10px; max-width: 340px; margin-top: 16px; }
+.btn.oauth { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; min-height: 48px; }
+.btn.oauth svg { display: block; flex: none; }
+.btn.oauth.google { background: #ffffff; color: #1f1f1f; border-color: #dadce0; }
+.btn.oauth.kakao { background: #fee500; color: #191919; border-color: #fee500; }
+.btn.oauth:disabled { opacity: .5; cursor: not-allowed; }
+.manual-head .status { flex: none; }

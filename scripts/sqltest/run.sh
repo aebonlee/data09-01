@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-# supabase/schema.sql 을 임시 로컬 PostgreSQL 에 실제로 적용해 검증한다.
+# supabase/schema.sql(수강생 본인 프로젝트용)과 supabase/2026-09-30_data0901_auth.sql(공용 프로젝트용)을
+# 임시 로컬 PostgreSQL 에 실제로 적용해 검증한다.
 #
 #   ./scripts/sqltest/run.sh
 #
@@ -54,6 +55,15 @@ PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ROOT/supabase/schem
 echo "③ 재적용 (재실행 안전한가)"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ROOT/supabase/schema.sql"
 
+# 공용 프로젝트용 스크립트(data0901_ 접두사) — 공용 개체 스텁 위에 두 번 적용
+# SHARED_SQL 로 다른 파일을 넣을 수 있다(일부러 깨뜨린 사본으로 검사기가 잡는지 볼 때)
+SHARED_SQL="${SHARED_SQL:-$ROOT/supabase/2026-09-30_data0901_auth.sql}"
+echo "③-1 공용 개체 스텁 (www_profiles·www_admins·storage)"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ROOT/scripts/sqltest/05_shared_stub.local.sql"
+echo "③-2 $(basename "$SHARED_SQL") 적용 · 재적용"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
+
 echo "④ 공통 불변식 검증"
 "${PSQL[@]}" -f "$ROOT/scripts/sqltest/10_common.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
 
@@ -61,6 +71,9 @@ if [ -f "$ROOT/scripts/sqltest/20_project.local.sql" ]; then
   echo "⑤ 프로젝트별 검증"
   "${PSQL[@]}" -f "$ROOT/scripts/sqltest/20_project.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
 fi
+
+echo "⑥ 공용 프로젝트(data0901_) 검증"
+"${PSQL[@]}" -f "$ROOT/scripts/sqltest/30_data0901_shared.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
 
 echo ""
 echo "SQL 검증 통과."

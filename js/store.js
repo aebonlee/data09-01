@@ -32,7 +32,7 @@
     clearDb: function () { del(KEY_DB); del(KEY_SESSION); },
     getSession: function () { try { return JSON.parse(get(KEY_SESSION) || 'null'); } catch (e) { return null; } },
     setSession: function (s) { if (s) set(KEY_SESSION, JSON.stringify(s)); else del(KEY_SESSION); },
-    getLang: function () { return get(KEY_LANG) || 'ko'; },
+    getLang: function () { return get(KEY_LANG); }, // 저장된 선택이 없으면 null — 화면이 브라우저 언어로 정합니다
     setLang: function (l) { set(KEY_LANG, l); },
     available: function () { get(KEY_LANG); return ok; }
   };

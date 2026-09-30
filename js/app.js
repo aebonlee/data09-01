@@ -11,20 +11,39 @@
  *   #/manual           매뉴얼 근거 검색 (내 PC 의 매뉴얼 PDF → 목차·키워드 검색·발췌)   — 2026-09-29
  *   #/members          회원 관리 (Admin: 가입 승인·권한·관리 지역)                        — 2026-09-29
  *   #/mails            PS 메일 발송 대기 (Admin: AI 답변 불가·중복 등록 건)              — 2026-09-29
+ *   #/profile          기본 정보 입력(첫 로그인)·내 정보                                   — 2026-09-30
+ *   #/manual-admin     매뉴얼 등록 (Admin: 서버 비공개 저장소에 매뉴얼 텍스트 색인 올리기)    — 2026-09-30
+ *
+ * 2026-09-30 강사 결정: 로그인은 공용 Supabase 의 구글·카카오(js/auth.js), 가입 뒤 기본 정보를 받고
+ * 관리자가 승인합니다. 예전의 아이디 직접 가입은 없앴고, 예시 데이터 시연은 로그인 없이 예시 계정으로 합니다.
+ * 기술지원 기록(등록·문의·회신·메일·Log)은 아직 이 브라우저(localStorage)에 둡니다 — 서버 이전은 다음 단계.
  */
 (function () {
   'use strict';
   var L = window.TSLogic, S = window.TSStore, M = window.TSManual, MS = window.TSManualStore;
+  var P = window.TSProfile, A = window.TSAuth;
   var db = S.loadDb();
-  var lang = S.getLang();
+  var lang = S.getLang() || window.TSI18n.defaultLang(navigator.language);
+  if (lang !== 'ko' && lang !== 'en') lang = 'ko';
   var t = window.TSI18n.make(lang);
+  // 서버 로그인 상태 — checked: 확인이 끝났는지, user: 구글·카카오 계정, profile: data0901_profiles 행
+  var auth = { checked: !A.enabled(), user: null, profile: null, www: null, isAdmin: false, error: '' };
   var main = document.getElementById('main');
   var listFilter = null; // 조회 화면 검색조건 유지
   var afterRender = null; // 화면을 다시 그린 뒤 띄울 안내(대화상자) — render 가 열린 대화상자를 닫기 때문
-  var manuals = [];       // 불러온 매뉴얼 색인 (IndexedDB 에서 읽어 옴)
+  // 매뉴얼 색인: 서버에 등록된 것(승인 회원, 메모리에만) + 내 PC 에서 불러온 것(IndexedDB). 같은 파일은 서버 쪽을 씁니다.
+  var manuals = [], localManuals = [], serverManuals = [];
+  var serverManualState = { status: 'idle', k: 0, n: 0, msg: '' };
+  function mergeManuals() {
+    var files = {};
+    serverManuals.forEach(function (x) { files[x.file] = true; });
+    manuals = serverManuals.concat(localManuals.filter(function (x) { return !files[x.file]; }));
+    manuals.sort(function (a, b) { return a.file < b.file ? -1 : 1; });
+  }
   var manualsReady = MS.list().then(function (list) {
-    manuals = (list || []).map(function (x) { var r = M.readIndexJson(x); return r.ok ? r.index : null; }).filter(Boolean);
-  }).catch(function () { manuals = []; });
+    localManuals = (list || []).map(function (x) { var r = M.readIndexJson(x); return r.ok ? r.index : null; }).filter(Boolean);
+    mergeManuals();
+  }).catch(function () { localManuals = []; mergeManuals(); });
 
   // ── 도우미 ────────────────────────────────────────────────
   function h(tag, attrs) {
@@ -49,8 +68,24 @@
   function save(newDb) { if (newDb) db = newDb; S.saveDb(db); }
   function now() { return new Date(); }
   function session() { return S.getSession(); }
-  function me() { var s = session(); return s ? L.userOf(db, s.reg_id) : null; }
+  // 서버 로그인 사용자를 도구의 사용자 행 모양으로 (승인 전이면 approval 이 Pending)
+  function serverUser() { return auth.user && auth.profile ? P.toLocalUser(auth.profile, auth.isAdmin) : null; }
+  // 지금 쓰는 사용자: 서버 로그인이면 승인된 경우에만, 아니면 예시 데이터 시연 계정(이 브라우저 안)
+  function me() {
+    if (auth.user) { var su = serverUser(); return su && L.isApproved(su) ? su : null; }
+    var s = session(); return s && !s.server ? L.userOf(db, s.reg_id) : null;
+  }
   function isAdmin() { return L.isApprovedAdmin(me()); }
+  function isServerAdmin() { return !!auth.user && isAdmin(); }
+  function terrLabel(code) { return P.territoryLabel(code, lang); }
+  function kindLabel(kind) { return /service|정비/i.test(kind || '') ? t('kind_sm') : /operator|운전/i.test(kind || '') ? t('kind_om') : (kind || ''); }
+  // 서버 회원을 로컬 사용자 목록에 둡니다(조회·상세의 이름·딜러, PS 메일 받는 사람 고르기에 씀)
+  function upsertLocalUser(u) {
+    var k = String(u.reg_id).toLowerCase();
+    var i = -1;
+    db.users.forEach(function (x, j) { if (String(x.reg_id).toLowerCase() === k) i = j; });
+    if (i === -1) db.users.push(u); else db.users[i] = Object.assign({}, db.users[i], u);
+  }
   function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
 
   var toastTimer;
@@ -176,63 +211,128 @@
   // ── 머리 ─────────────────────────────────────────────────
   function renderHeader(route) {
     document.documentElement.lang = lang;
+    document.title = t('brand') + ' — ' + t('brandSub');
     document.querySelectorAll('[data-t]').forEach(function (el) { el.textContent = t(el.getAttribute('data-t')); });
-    document.getElementById('langSelect').value = lang;
+    document.querySelectorAll('[data-t-attr]').forEach(function (el) {
+      var p = el.getAttribute('data-t-attr').split(':'); el.setAttribute(p[0], t(p[1]));
+    });
+    document.querySelectorAll('.lang-toggle button').forEach(function (b) { b.setAttribute('aria-pressed', b.value === lang ? 'true' : 'false'); });
     var nav = document.getElementById('nav');
     nav.textContent = '';
     var u = me();
     var items = [['request', 'nav_request'], ['list', 'nav_list'], ['manual', 'nav_manual']];
     if (L.isApprovedAdmin(u)) {
-      var pendingUsers = db.users.filter(function (x) { return L.approvalOf(x) === 'Pending'; }).length;
+      // 서버 로그인 관리자의 승인 대기 수는 서버 목록(membersCache)에서, 시연은 로컬 사용자에서 셉니다
+      var pendingUsers = auth.user ? (membersCache || []).filter(function (x) { return x.approval === 'Pending'; }).length
+        : db.users.filter(function (x) { return L.approvalOf(x) === 'Pending'; }).length;
       var pendingMails = (db.mails || []).filter(function (x) { return x.status === 'Pending'; }).length;
       items.push(['members', 'nav_members', pendingUsers], ['mails', 'nav_mails', pendingMails], ['sources', 'nav_sources'], ['logs', 'nav_logs']);
+      if (auth.user) items.push(['manual-admin', 'nav_manual_admin']);
     }
     items.push(['data', 'nav_data']);
+    if (auth.user && auth.profile) items.push(['profile', 'nav_profile']);
     items.forEach(function (it) {
       nav.appendChild(h('a', { href: '#/' + it[0], 'aria-current': route === it[0] ? 'page' : null }, t(it[1]),
         it[2] ? h('span', { class: 'count-badge', title: t('pending_count') }, String(it[2])) : null));
     });
-    document.getElementById('whoami').textContent = u ? u.req_name + ' (' + u.reg_id + (u.user_type === 'ADMIN' ? ' · ADMIN' : '') + ')' : '';
-    var auth = document.getElementById('authBtn');
-    auth.textContent = u ? t('logout') : t('login');
+    var su = serverUser();
+    var who = u || su;
+    document.getElementById('whoami').textContent = who ? who.req_name + ' (' + who.reg_id + (who.user_type === 'ADMIN' && L.isApproved(who) ? ' · ADMIN' : '') +
+      (!auth.user ? ' · ' + t('demo_tag') : '') + ')' : (auth.user ? String(auth.user.email || '') : '');
+    var authBtn = document.getElementById('authBtn');
+    authBtn.textContent = u || auth.user ? t('logout') : t('login');
     var banner = document.getElementById('sampleBanner');
     banner.hidden = !db._sample;
     banner.textContent = t('sample_banner');
   }
 
-  document.getElementById('langSelect').addEventListener('change', function (e) {
-    lang = e.target.value; S.setLang(lang); t = window.TSI18n.make(lang); render();
+  // 한/영 전환 (KO | EN) — 선택은 이 브라우저에 기억합니다(저장소가 막혀 있으면 이번 방문만)
+  document.querySelectorAll('.lang-toggle button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      if (b.value === lang) return;
+      lang = b.value; S.setLang(lang); t = window.TSI18n.make(lang); render();
+    });
   });
   document.getElementById('authBtn').addEventListener('click', function () {
-    if (me()) logout(); else go('#/login');
+    if (me() || auth.user) logout(); else go('#/login');
   });
 
-  // 결과: { ok, code } — 승인 대기·반려된 계정은 로그인하지 못합니다(2026-09-29 수강생 답변)
+  // ── 로그인 ───────────────────────────────────────────────
+  // 접속 Log 는 이 브라우저에 남깁니다(로그인·로그아웃 시각). 서버 로그인도 처음 확인될 때 한 번 기록합니다.
+  function startLog(regId, server) {
+    var at = L.toDateTimeStr(now());
+    db.logs.push({ reg_id: regId, login_date: at, logout_date: '' });
+    save();
+    S.setSession({ reg_id: regId, login_date: at, server: !!server });
+  }
+  function endLog() {
+    var s = session();
+    if (!s) return;
+    for (var i = db.logs.length - 1; i >= 0; i--) {
+      var l = db.logs[i];
+      if (l.reg_id === s.reg_id && l.login_date === s.login_date && !l.logout_date) { l.logout_date = L.toDateTimeStr(now()); break; }
+    }
+    save();
+  }
+  // 예시 데이터 시연 계정으로 들어가기 (이 브라우저 안에서만, 비밀번호 없음)
+  // 결과: { ok, code } — 승인 대기·반려된 계정은 들어가지 못합니다(2026-09-29 수강생 답변)
   function login(regId) {
     var chk = L.canLogin(db, regId);
     if (!chk.ok) return chk;
-    var u = chk.user;
-    var at = L.toDateTimeStr(now());
-    db.logs.push({ reg_id: u.reg_id, login_date: at, logout_date: '' });
-    save();
-    S.setSession({ reg_id: u.reg_id, login_date: at });
+    startLog(chk.user.reg_id, false);
     return { ok: true };
   }
+  function resetAuth() {
+    auth = { checked: true, user: null, profile: null, www: null, isAdmin: false, error: '' };
+    serverManuals = []; serverManualState = { status: 'idle', k: 0, n: 0, msg: '' }; membersCache = null;
+    mergeManuals();
+  }
   function logout() {
-    var s = session();
-    if (s) {
-      for (var i = db.logs.length - 1; i >= 0; i--) {
-        var l = db.logs[i];
-        if (l.reg_id === s.reg_id && l.login_date === s.login_date && !l.logout_date) { l.logout_date = L.toDateTimeStr(now()); break; }
-      }
-      save();
-    }
+    endLog();
     S.setSession(null);
+    if (auth.user) {
+      A.signOut().then(function () { resetAuth(); go('#/login'); });
+      return;
+    }
     go('#/login');
   }
 
+  // 서버 로그인 상태를 읽어 옵니다(첫 화면, 구글·카카오에서 돌아왔을 때, 기본 정보 저장 뒤)
+  function refreshAuth() {
+    if (!A.enabled()) { auth.checked = true; return Promise.resolve(); }
+    return A.getUser().then(function (user) {
+      A.cleanUrl();
+      return A.loadState(user);
+    }).then(function (st) {
+      auth.user = st.user; auth.profile = st.profile; auth.www = st.www; auth.isAdmin = st.isAdmin;
+      auth.checked = true; auth.error = '';
+      afterAuth();
+    }).catch(function (e) {
+      auth.checked = true; auth.error = String(e && e.message || e);
+    });
+  }
+  function afterAuth() {
+    var su = serverUser();
+    if (!auth.user) {
+      var s0 = session();
+      if (s0 && s0.server) S.setSession(null); // 서버 세션이 끝났으면 기록도 닫습니다
+      return;
+    }
+    if (su && L.isApproved(su)) {
+      upsertLocalUser(su);
+      var s = session();
+      if (!s || !s.server || s.reg_id !== su.reg_id) { if (s) endLog(); startLog(su.reg_id, true); } else save();
+      loadServerManuals();
+      if (isAdmin()) loadMembers(false);
+    } else if (session()) {
+      endLog(); S.setSession(null); // 승인 전 서버 계정이면 예시 계정 세션은 닫습니다
+    }
+  }
+
   function guard(needAdmin) {
+    if (!auth.checked) { main.appendChild(h('div', { class: 'card' }, h('p', { class: 'note' }, t('login_checking')))); return false; }
     if (!me()) {
+      if (auth.user) { viewPending(); return false; }
       main.appendChild(h('div', { class: 'card' }, h('p', null, t('need_login')),
         h('a', { class: 'btn btn-primary', href: '#/login' }, t('login'))));
       return false;
@@ -247,10 +347,11 @@
   function loadSample(skipConfirm) {
     function doIt() {
       db = window.TSSample.build(now());
-      S.setSession(null);
+      if (!auth.user) S.setSession(null);
+      else { var su = serverUser(); if (su && L.isApproved(su)) upsertLocalUser(su); }
       save();
       toast(t('data_loaded'));
-      go('#/login');
+      go(auth.user ? '#/list' : '#/login');
     }
     var has = db.mains.length || db.users.length || db.sources.length;
     if (has && !skipConfirm) dialog(t('load_sample'), h('p', null, t('data_sample_confirm')),
@@ -258,73 +359,140 @@
     else doIt();
   }
 
-  // ── 접속화면 ─────────────────────────────────────────────
+  // ── 접속화면 — 구글·카카오 로그인 + 예시 데이터 시연 ────────────────
   function viewLogin() {
-    var loginForm = h('form', { class: 'card', novalidate: true },
+    if (auth.user) { go(auth.profile ? (me() ? '#/request' : '#/profile') : '#/profile'); return; }
+    var off = A.reason();
+    var loginCard = h('div', { class: 'card' },
       h('h1', null, t('login_title')),
-      field(t('login_id'), h('input', { name: 'reg_id', autocomplete: 'username', required: true }), { name: 'reg_id' }),
-      field(t('login_pw'), h('input', { name: 'password', type: 'password', autocomplete: 'current-password' }), { name: 'password', hint: t('login_pw_note') }),
-      h('div', { class: 'submit-bar' }, h('button', { class: 'btn btn-primary btn-big', type: 'submit' }, t('login_btn'))));
-    loginForm.addEventListener('submit', function (e) {
-      e.preventDefault();
-      var id = loginForm.elements.reg_id.value.trim();
-      var res = login(id);
-      if (!res.ok) { showErrors(loginForm, []); toast(t('login_' + res.code), true); return; }
-      go('#/request');
-    });
+      h('p', null, t('login_intro')));
+    if (!auth.checked) loginCard.appendChild(h('p', { class: 'note' }, t('login_checking')));
+    if (auth.error) loginCard.appendChild(h('p', { class: 'alert warn' }, t('auth_error', { msg: auth.error })));
+    if (off) {
+      loginCard.appendChild(h('p', { class: 'alert warn' }, t(off === 'file' ? 'login_off_file' : 'login_off_lib')));
+    }
+    function start(provider) {
+      A.signIn(provider).catch(function (e) { toast(t('login_fail', { msg: String(e && e.message || e) }), true); });
+    }
+    loginCard.appendChild(h('div', { class: 'oauth-buttons' },
+      h('button', { class: 'btn oauth google', type: 'button', disabled: !!off, onclick: function () { start('google'); } },
+        oauthIcon('google'), h('span', null, t('login_google'))),
+      h('button', { class: 'btn oauth kakao', type: 'button', disabled: !!off, onclick: function () { start('kakao'); } },
+        oauthIcon('kakao'), h('span', null, t('login_kakao')))));
 
-    var accounts = h('div', { class: 'card' }, h('h2', null, t('login_pick')));
-    if (!db.users.length) {
-      accounts.appendChild(h('p', null, t('empty_db')));
-      accounts.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { loadSample(true); } }, t('load_sample')));
+    // 시연 — 로그인 없이 예시 데이터와 예시 계정으로
+    var demo = h('div', { class: 'card' }, h('h2', null, t('demo_title')), h('p', { class: 'note' }, t('demo_note')));
+    var demoUsers = db.users.filter(function (u) { return !u._server; });
+    if (!db._sample || !demoUsers.length) {
+      demo.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { loadSample(!db.mains.length && !db.users.length); } }, t('load_sample')));
     } else {
-      accounts.appendChild(h('div', { class: 'account-list' }, db.users.map(function (u) {
+      demo.appendChild(h('h3', null, t('demo_accounts')));
+      demo.appendChild(h('div', { class: 'account-list' }, demoUsers.map(function (u) {
         var ap = L.approvalOf(u);
-        return h('button', { class: 'btn', type: 'button', onclick: function () { loginForm.elements.reg_id.value = u.reg_id; loginForm.elements.reg_id.focus(); } },
+        return h('button', { class: 'btn', type: 'button', onclick: function () {
+          var res = login(u.reg_id);
+          if (!res.ok) { toast(t('login_' + res.code), true); return; }
+          go('#/request');
+        } },
           u.req_name + ' · ' + u.reg_id + (u.user_type === 'ADMIN' ? ' (ADMIN)' : ''),
           ap !== 'Approved' ? h('span', { class: 'status ' + (ap === 'Pending' ? 'red' : 'black'), style: 'margin-left:6px' }, t('approval_' + ap)) : null);
       })));
     }
+    main.appendChild(h('div', { class: 'login-wrap' }, loginCard, demo));
+  }
+  function oauthIcon(kind) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('width', '18'); svg.setAttribute('height', '18'); svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('viewBox', kind === 'google' ? '0 0 48 48' : '0 0 24 24');
+    var paths = kind === 'google' ? [
+      ['#EA4335', 'M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z'],
+      ['#4285F4', 'M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z'],
+      ['#FBBC05', 'M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z'],
+      ['#34A853', 'M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z']
+    ] : [['#191919', 'M12 3C6.48 3 2 6.48 2 10.77c0 2.76 1.85 5.18 4.63 6.55l-1.18 4.33c-.1.38.33.68.66.46l5.15-3.4c.24.02.49.03.74.03 5.52 0 10-3.48 10-7.77S17.52 3 12 3z']];
+    paths.forEach(function (p) { var el = document.createElementNS(ns, 'path'); el.setAttribute('fill', p[0]); el.setAttribute('d', p[1]); svg.appendChild(el); });
+    return svg;
+  }
 
-    // 회원 등록 — 본인이 정한 ID(사번 없음), 중복 ID 확인, 관리자 승인 후 사용 (2026-09-29 수강생 답변)
-    var idInput = h('input', { name: 'reg_id', maxlength: 20, autocomplete: 'off', placeholder: 'kim_bs01' });
-    var idResult = h('small', { class: 'id-check', 'aria-live': 'polite' });
-    function checkId() {
-      var r = L.checkRegId(db, idInput.value);
-      idResult.textContent = t('id_' + (r.ok ? 'ok' : r.code === 'required' ? 'required' : r.code === 'bad_id' ? 'bad' : 'taken'));
-      idResult.className = 'id-check ' + (r.ok ? 'ok' : 'ng');
-      return r;
+  // ── 기본 정보 입력(첫 로그인) · 내 정보 ────────────────────────────
+  function viewProfile() {
+    if (!auth.checked) { main.appendChild(h('div', { class: 'card' }, h('p', { class: 'note' }, t('login_checking')))); return; }
+    if (!auth.user) { go('#/login'); return; }
+    var p = auth.profile || {};
+    var www = auth.www || {};
+    var first = !auth.profile;
+    var countrySel = h('select', { name: 'country_cd', id: 'f_country_cd' },
+      h('option', { value: '' }, t('select_placeholder')),
+      P.countryOptions(lang).map(function (c) { return h('option', { value: c.code, selected: c.code === (p.country_cd || (first && lang === 'ko' ? 'KR' : '')) }, c.label); }));
+    var regionList = h('datalist', { id: 'regionList' });
+    function fillRegions() {
+      regionList.textContent = '';
+      P.regionSuggestions(countrySel.value).forEach(function (r) { regionList.appendChild(h('option', { value: r }, terrLabel(r) !== r ? terrLabel(r) : null)); });
     }
-    idInput.addEventListener('input', function () { idResult.textContent = ''; });
-    var idField = h('div', { class: 'field', 'data-field': 'reg_id' }, h('span', null, t('login_id') + ' *'),
-      h('div', { class: 'input-row' }, idInput, h('button', { class: 'btn', type: 'button', onclick: checkId }, t('id_check'))),
-      h('small', { class: 'note' }, t('id_rule')), idResult, h('small', { class: 'err', hidden: true }));
-    var memberForm = h('form', { class: 'form-grid', novalidate: true },
-      idField,
-      field(t('f_req_name') + ' *', h('input', { name: 'req_name', maxlength: 50 }), { name: 'req_name' }),
-      field(t('f_e_mail') + ' *', h('input', { name: 'e_mail', type: 'email', maxlength: 50 }), { name: 'e_mail', hint: t('email_hint') }),
-      field(t('f_phone'), h('input', { name: 'phone', type: 'tel', maxlength: 20 }), { name: 'phone' }),
-      field(t('f_country'), h('input', { name: 'country_cd', maxlength: 20, placeholder: 'KR' }), { name: 'country_cd' }),
-      field(t('f_dealer') + ' *', h('input', { name: 'dealer', maxlength: 50 }), { name: 'dealer' }),
-      field(t('f_territory') + ' *', codeSelect('territory_cd', L.TERRITORY_CD, ''), { name: 'territory_cd', hint: t('territory_hint') }),
-      h('p', { class: 'span-all note' }, t('member_note')),
-      h('div', { class: 'span-all btn-row' }, h('button', { class: 'btn btn-primary', type: 'submit' }, t('member_save'))));
-    memberForm.addEventListener('submit', function (e) {
+    countrySel.addEventListener('change', fillRegions);
+    var dealerY = h('input', { type: 'radio', name: 'is_dealer', value: 'Y', checked: p.is_dealer === true });
+    var dealerN = h('input', { type: 'radio', name: 'is_dealer', value: 'N', checked: p.is_dealer === false });
+    var dealerName = h('input', { name: 'dealer_name', maxlength: 60, value: p.dealer_name || '' });
+    var dealerNameField = field(t('f_dealer_name'), dealerName, { name: 'dealer_name' });
+    function syncDealer() { dealerNameField.hidden = !dealerY.checked; }
+    dealerY.addEventListener('change', syncDealer); dealerN.addEventListener('change', syncDealer);
+    var form = h('form', { class: 'card form-grid', novalidate: true },
+      h('p', { class: 'span-all note' }, t('ob_login_as', { email: auth.user.email || '-' })),
+      field(t('f_ob_name') + ' *', h('input', { name: 'name', maxlength: 50, autocomplete: 'name', value: p.name || www.name || '' }), { name: 'name' }),
+      field(t('f_ob_phone') + ' *', h('input', { name: 'phone', type: 'tel', maxlength: 25, autocomplete: 'tel', placeholder: '010-1234-5678', value: p.phone || www.phone || '' }), { name: 'phone', hint: t('phone_hint') }),
+      field(t('f_ob_email') + ' *', h('input', { name: 'e_mail', type: 'email', maxlength: 80, autocomplete: 'email', value: p.e_mail || www.email || auth.user.email || '' }), { name: 'e_mail', hint: t('ob_email_hint') }),
+      h('div', { class: 'field', 'data-field': 'is_dealer' }, h('span', null, t('f_is_dealer') + ' *'),
+        h('div', { class: 'checks' }, h('label', { class: 'check' }, dealerY, t('dealer_yes')), h('label', { class: 'check' }, dealerN, t('dealer_no'))),
+        h('small', { class: 'err', hidden: true })),
+      dealerNameField,
+      field(t('f_ob_country') + ' *', countrySel, { name: 'country_cd' }),
+      field(t('f_ob_region') + ' *', h('input', { name: 'region', list: 'regionList', maxlength: 60, autocomplete: 'off', value: p.region || '' }), { name: 'region', hint: t('region_hint') }),
+      regionList,
+      h('div', { class: 'span-all submit-bar' }, h('button', { class: 'btn btn-primary btn-big', type: 'submit' }, t('ob_save'))));
+    fillRegions(); syncDealer();
+    form.addEventListener('submit', function (e) {
       e.preventDefault();
-      var res = L.registerMember(db, fd(memberForm), now());
-      if (!res.ok) {
-        showErrors(memberForm, res.errors);
-        if (res.errors.some(function (x) { return x.field === 'reg_id'; })) checkId();
-        return;
-      }
-      save(res.db);
-      afterRender = { title: t('member_title'), body: t(res.autoApproved ? 'member_first_admin' : 'member_pending', { id: res.user.reg_id }) };
-      render();
+      var v = fd(form);
+      v.is_dealer = dealerY.checked ? 'Y' : dealerN.checked ? 'N' : '';
+      var res = P.validateOnboarding(v);
+      if (!res.ok) { showErrors(form, res.errors); return; }
+      var btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+      A.saveProfile(auth, res.value).then(function (r) {
+        auth.profile = r.profile; auth.www = r.www;
+        return refreshAuth().then(function () {
+          var body = t(me() ? 'ob_saved' : 'ob_saved_pending') + (r.warnings.length ? ' ' + t('ob_www_warn') : '');
+          afterRender = { title: t(first ? 'ob_title' : 'ob_edit_title'), body: body };
+          go(me() ? (first ? '#/request' : '#/profile') : '#/profile');
+          if (!first) render();
+        });
+      }).catch(function (err) {
+        btn.disabled = false;
+        var dup = /duplicate|unique|23505/i.test(String(err && (err.code || '') + ' ' + err.message));
+        toast(dup ? t('err_dup_account') : t('auth_error', { msg: String(err && err.message || err) }), true);
+      });
     });
-
-    main.appendChild(h('div', { class: 'login-wrap' },
-      h('div', null, loginForm, accounts),
-      h('div', { class: 'card' }, h('h2', null, t('member_title')), memberForm)));
+    main.appendChild(h('div', { class: 'page-head' }, h('div', { style: 'margin-right:auto' },
+      h('h1', null, t(first ? 'ob_title' : 'ob_edit_title')), h('p', { class: 'note' }, t(first ? 'ob_note' : 'ob_edit_note')))));
+    if (!first && !me()) main.appendChild(pendingCard());
+    main.appendChild(form);
+  }
+  function pendingCard() {
+    var su = serverUser();
+    var rejected = su && su.approval === 'Rejected';
+    return h('div', { class: 'card' },
+      h('h2', null, h('span', { class: 'status ' + (rejected ? 'black' : 'red'), style: 'margin-right:8px' }, t('approval_' + (su ? su.approval : 'Pending'))),
+        t(rejected ? 'rejected_title' : 'pending_title')),
+      h('p', null, t(rejected ? 'login_rejected' : 'pending_body')),
+      h('div', { class: 'btn-row' },
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { refreshAuth().then(render); } }, t('btn_refresh')),
+        h('a', { class: 'btn', href: '#/profile' }, t('btn_edit_profile')),
+        h('button', { class: 'btn', type: 'button', onclick: logout }, t('logout'))));
+  }
+  // 로그인했지만 아직 승인 전(또는 기본 정보 전)
+  function viewPending() {
+    if (!auth.profile) { go('#/profile'); return; }
+    main.appendChild(pendingCard());
   }
 
   // ── 기술지원1·3 (등록 / 후속 요청) ──────────────────────────
@@ -520,9 +688,10 @@
       tbody));
 
     function exportCsv() {
-      var headers = cols.map(function (c) { return { key: c[0], label: c[0] }; });
+      // 머리행은 화면 언어의 열 이름(한국어 화면은 「등록번호(Ref. No.)」처럼 필드명을 함께 적음)
+      var headers = cols.map(function (c) { return { key: c[0], label: t(c[1]) }; });
       var out = rows.map(function (r) { var o = Object.assign({}, r); o.status = r.status; return o; });
-      var name = (admin ? '기술지원조회_Admin_' : '기술지원조회_') + L.toDateStr(now()) + (db._sample ? '_예시데이터' : '') + '.csv';
+      var name = t(admin ? 'file_list_admin' : 'file_list') + '_' + L.toDateStr(now()) + (db._sample ? '_' + t('file_sample') : '') + '.csv';
       download(name, new Blob([L.toCsv(headers, out)], { type: 'text/csv;charset=utf-8' }));
     }
 
@@ -822,9 +991,53 @@
     });
   }
   function saveManual(ix) {
-    manuals = manuals.filter(function (x) { return x.file !== ix.file; }).concat([ix]);
-    manuals.sort(function (a, b) { return a.file < b.file ? -1 : 1; });
+    localManuals = localManuals.filter(function (x) { return x.file !== ix.file; }).concat([ix]);
+    mergeManuals();
     return MS.put(M.toStorable(ix));
+  }
+
+  // 서버에 등록된 매뉴얼 — 승인 회원만 읽을 수 있습니다(Storage 정책). 이 브라우저 메모리에만 둡니다.
+  var serverManualPromise = null;
+  function loadServerManuals(force) {
+    if (!auth.user || !me()) return Promise.resolve();
+    if (serverManualPromise && !force) return serverManualPromise;
+    serverManualState = { status: 'loading', k: 0, n: 0, msg: '' };
+    serverManualPromise = A.listManuals().then(function (objs) {
+      serverManualState.n = objs.length;
+      var out = [];
+      var chain = Promise.resolve();
+      objs.forEach(function (o) {
+        chain = chain.then(function () {
+          return A.downloadManual(o.name).then(function (txt) {
+            var r = M.readIndexJson(txt);
+            if (r.ok) { r.index._server = o.name; r.index._size = o.metadata && o.metadata.size; out.push(r.index); }
+          }).catch(function () { /* 한 파일이 깨져도 나머지는 씁니다 */ })
+            .then(function () { serverManualState.k++; if (/^#\/manual$/.test(location.hash)) updateServerStatus(); });
+        });
+      });
+      return chain.then(function () {
+        serverManuals = out; mergeManuals();
+        serverManualState.status = 'ready';
+      });
+    }).catch(function (e) {
+      serverManualState = { status: 'error', k: 0, n: 0, msg: String(e && e.message || e) };
+      serverManualPromise = null;
+    }).then(function () {
+      if (/^#\/(manual|detail)/.test(location.hash)) render();
+    });
+    return serverManualPromise;
+  }
+  function serverStatusText() {
+    var st = serverManualState;
+    if (!auth.user || !me()) return t('manual_server_need');
+    if (st.status === 'loading') return t('manual_server_loading', { k: st.k, n: st.n || '?' });
+    if (st.status === 'error') return t('manual_server_fail', { msg: st.msg });
+    if (st.status === 'ready' && !serverManuals.length) return t('manual_server_none');
+    return t('manual_server_note');
+  }
+  function updateServerStatus() {
+    var el = document.getElementById('serverManualStatus');
+    if (el) el.textContent = serverStatusText();
   }
 
   var manualQuery = '', manualModel = '';
@@ -832,9 +1045,13 @@
     if (!guard()) return;
     main.appendChild(h('div', { class: 'page-head' },
       h('div', { style: 'margin-right:auto' }, h('h1', null, t('manual_title')), h('p', { class: 'note' }, t('manual_sub')))));
-    main.appendChild(h('div', { class: 'alert info' }, t('manual_privacy')));
+    // 서버에 등록된 매뉴얼(승인 회원) — 관리자는 「매뉴얼 등록」에서 올립니다
+    main.appendChild(h('div', { class: 'card' },
+      h('h2', null, t('manual_server_title')),
+      h('p', { id: 'serverManualStatus', class: serverManualState.status === 'error' ? 'alert warn' : 'note', 'aria-live': 'polite' }, serverStatusText()),
+      isServerAdmin() ? h('a', { class: 'btn', href: '#/manual-admin' }, t('nav_manual_admin')) : null));
 
-    // 불러오기
+    // 내 PC 에서 불러오기 (서버 매뉴얼이 없을 때의 대안)
     var status = h('p', { class: 'note', 'aria-live': 'polite' });
     var pdfInput = h('input', { type: 'file', accept: '.pdf,application/pdf', multiple: true });
     var jsonInput = h('input', { type: 'file', accept: '.json,application/json', multiple: true });
@@ -872,7 +1089,8 @@
         });
     });
     main.appendChild(h('div', { class: 'card' },
-      h('h2', null, t('manual_load')),
+      h('h2', null, t('manual_local_title')),
+      h('p', { class: 'alert info' }, t('manual_privacy')),
       h('div', { class: 'form-grid' },
         h('div', { class: 'field' }, h('span', null, t('manual_pdf')), pdfInput, h('small', { class: 'note' }, t('manual_pdf_note'))),
         h('div', { class: 'field' }, h('span', null, t('manual_json')), jsonInput, h('small', { class: 'note' }, t('manual_json_note')))),
@@ -883,19 +1101,20 @@
 
     // 불러온 매뉴얼 — 적용 모델은 고칠 수 있습니다(요청 모델과 맞춰 검색 대상을 고름)
     var rows = manuals.map(function (ix) {
-      var models = h('input', { value: ix.models || '', 'aria-label': t('manual_models') + ' — ' + ix.file });
-      models.addEventListener('change', function () { ix.models = models.value.trim(); saveManual(ix); toast(t('manual_models_saved')); });
+      var models = h('input', { value: ix.models || '', 'aria-label': t('manual_models') + ' — ' + ix.file, readonly: !!ix._server });
+      if (!ix._server) models.addEventListener('change', function () { ix.models = models.value.trim(); saveManual(ix); toast(t('manual_models_saved')); });
       var toc = (ix.toc && ix.toc.entries) || [];
       // 소스 등록(모델 ↔ 매뉴얼 대응표)에서 이 파일에 연결된 모델
       var linked = db.sources.filter(function (sv) { return M.manualsBySource([ix], db.sources, sv.model).length; })
         .map(function (sv) { return sv.model; });
       return h('div', { class: 'manual-item' },
         h('div', { class: 'manual-head' },
-          h('strong', null, ix.title), h('span', { class: 'sub' }, (ix.kind ? ix.kind + ' · ' : '') + ix.pages.length + t('page_unit') + ' · ' + t('manual_toc_count', { n: toc.length })),
-          h('button', { class: 'btn btn-danger', type: 'button', onclick: function () {
+          h('span', { class: 'status ' + (ix._server ? 'blue' : 'black') }, t(ix._server ? 'manual_badge_server' : 'manual_badge_local')),
+          h('strong', null, ix.title), h('span', { class: 'sub' }, (ix.kind ? kindLabel(ix.kind) + ' · ' : '') + ix.pages.length + t('page_unit') + ' · ' + t('manual_toc_count', { n: toc.length })),
+          ix._server ? null : h('button', { class: 'btn btn-danger', type: 'button', onclick: function () {
             dialog(t('manual_remove'), h('p', null, t('manual_remove_confirm', { name: ix.title })), [
               { label: t('btn_close'), value: 'close' },
-              { label: t('manual_remove'), primary: true, onClick: function () { manuals = manuals.filter(function (x) { return x !== ix; }); MS.remove(ix.file); render(); } }]);
+              { label: t('manual_remove'), primary: true, onClick: function () { localManuals = localManuals.filter(function (x) { return x !== ix; }); mergeManuals(); MS.remove(ix.file); render(); } }]);
           } }, t('manual_remove'))),
         h('p', { class: linked.length ? 'note' : 'alert warn' }, linked.length ? t('manual_linked', { list: linked.join(', ') }) : t('manual_not_linked')),
         h('label', { class: 'field' }, h('span', null, t('manual_models')), models, h('small', { class: 'note' }, t('manual_models_note'))),
@@ -936,9 +1155,176 @@
     if (manualQuery) run();
   }
 
+  // ── 매뉴얼 등록 (서버 관리자) ─────────────────────────────────
+  // 수강생이 받은 매뉴얼을 승인 회원이 쓰도록 올립니다. 원문 PDF 는 올리지 않고 쪽별 텍스트 색인(JSON)을
+  // 압축해 비공개 버킷(data0901-manuals)에 둡니다. 읽기 = 승인 회원, 쓰기 = 관리자(서버 정책).
+  var mregList = null, mregError = '';
+  function viewManualAdmin() {
+    if (!guard(true)) return;
+    if (!auth.user) { main.appendChild(h('div', { class: 'card' }, h('p', null, t('manual_server_need')))); return; }
+    main.appendChild(h('div', { class: 'page-head' },
+      h('div', { style: 'margin-right:auto' }, h('h1', null, t('mreg_title')), h('p', { class: 'note' }, t('mreg_sub')))));
+    var status = h('p', { class: 'note', 'aria-live': 'polite' });
+    var jsonInput = h('input', { type: 'file', accept: '.json,application/json', multiple: true });
+    var pdfInput = h('input', { type: 'file', accept: '.pdf,application/pdf', multiple: true });
+    function finish(done, fails) {
+      mregList = null; serverManualPromise = null; loadServerManuals(true);
+      afterRender = { title: t('mreg_title'), body: [t('mreg_done', { n: done })].concat(fails).join('\n') };
+      render();
+    }
+    function uploadAll(items, readOne) {
+      jsonInput.disabled = pdfInput.disabled = true;
+      var done = 0, fails = [], chain = Promise.resolve();
+      items.forEach(function (f, k) {
+        chain = chain.then(function () {
+          status.textContent = t('mreg_uploading', { k: k + 1, total: items.length, name: f.name });
+          return readOne(f, function (i, n) {
+            if (i === 1 || i % 10 === 0 || i === n) status.textContent = t('manual_reading', { name: f.name, i: i, n: n, k: k + 1, total: items.length });
+          }).then(function (obj) { return A.uploadManual(obj); })
+            .then(function () { done++; })
+            .catch(function (e) { fails.push(t('mreg_fail', { name: f.name, msg: String(e && e.message || e) })); });
+        });
+      });
+      chain.then(function () { finish(done, fails); });
+    }
+    jsonInput.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(jsonInput.files);
+      if (!files.length) return;
+      uploadAll(files, function (f) {
+        return f.text().then(function (txt) {
+          var r = M.readIndexJson(txt);
+          if (!r.ok) throw new Error(t('manual_json_' + r.code));
+          return M.toStorable(r.index);
+        });
+      });
+    });
+    pdfInput.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(pdfInput.files);
+      if (!files.length) return;
+      uploadAll(files, function (f, progress) { return extractPdf(f, progress).then(M.toStorable); });
+    });
+    main.appendChild(h('div', { class: 'card' },
+      h('div', { class: 'form-grid' },
+        h('div', { class: 'field' }, h('span', null, t('mreg_json')), jsonInput, h('small', { class: 'note' }, t('mreg_json_note'))),
+        h('div', { class: 'field' }, h('span', null, t('mreg_pdf')), pdfInput, h('small', { class: 'note' }, t('mreg_pdf_note')))),
+      typeof window.CompressionStream !== 'function' ? h('p', { class: 'alert warn' }, t('mreg_no_gzip')) : null,
+      status));
+
+    var listCard = h('div', { class: 'card' });
+    main.appendChild(listCard);
+    if (mregError) listCard.appendChild(h('p', { class: 'alert warn' }, t('auth_error', { msg: mregError })));
+    if (!mregList) {
+      listCard.appendChild(h('p', { class: 'note' }, t('mreg_loading')));
+      A.listManuals().then(function (objs) { mregList = objs; mregError = ''; })
+        .catch(function (e) { mregList = []; mregError = String(e && e.message || e); })
+        .then(function () { if (location.hash === '#/manual-admin') render(); });
+      return;
+    }
+    listCard.appendChild(h('h2', null, t('mreg_list', { n: mregList.length })));
+    if (!mregList.length) { listCard.appendChild(h('p', { class: 'note' }, t('mreg_empty'))); return; }
+    listCard.appendChild(h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
+      h('tbody', null, mregList.map(function (o) {
+        var size = o.metadata && o.metadata.size ? Math.round(o.metadata.size / 1024) + ' KB' : '';
+        return h('tr', null,
+          h('td', null, o.name), h('td', { class: 'nowrap' }, size),
+          h('td', { class: 'nowrap' }, String(o.updated_at || o.created_at || '').slice(0, 10)),
+          h('td', null, h('button', { class: 'btn btn-danger', type: 'button', onclick: function () {
+            dialog(t('manual_remove'), h('p', null, t('mreg_remove_confirm', { name: o.name })), [
+              { label: t('btn_close'), value: 'close' },
+              { label: t('manual_remove'), primary: true, onClick: function () {
+                A.removeManual(o.name).then(function () { mregList = null; loadServerManuals(true); render(); })
+                  .catch(function (e) { toast(t('auth_error', { msg: String(e && e.message || e) }), true); });
+              } }]);
+          } }, t('manual_remove'))));
+      })))));
+  }
+
   // ── 회원 관리 (Admin) — 가입 승인·권한·관리 지역 ─────────────────
+  // 서버 로그인 관리자: 구글·카카오로 가입한 회원(data0901_profiles). 예시 데이터 시연: 이 브라우저의 예시 계정.
+  var membersCache = null, membersError = '';
+  function loadMembers(rerender) {
+    return A.listMembers().then(function (rows) {
+      membersCache = rows; membersError = '';
+      rows.forEach(function (p) { upsertLocalUser(P.toLocalUser(p, false)); }); // PS 메일 받는 사람 고르기에 씀
+      save();
+    }).catch(function (e) { membersError = String(e && e.message || e); })
+      .then(function () { if (rerender !== false && /^#\/(members|list|request|detail|mails)/.test(location.hash || '')) render(); else renderHeader(currentRoute()); });
+  }
   function viewMembers() {
     if (!guard(true)) return;
+    if (auth.user) viewMembersServer(); else viewMembersLocal();
+  }
+  function territoryChecks(selected) {
+    var mine = L.listTerritories(selected);
+    return L.TERRITORY_CD.map(function (c) {
+      return h('label', { class: 'check' }, h('input', { type: 'checkbox', value: c, checked: mine.indexOf(c) !== -1 }), terrLabel(c));
+    });
+  }
+  function viewMembersServer() {
+    main.appendChild(h('div', { class: 'page-head' },
+      h('div', { style: 'margin-right:auto' }, h('h1', null, t('members_title')),
+        h('p', { class: 'note' }, t('members_sub', { n: (membersCache || []).filter(function (x) { return x.approval === 'Pending'; }).length }))),
+      h('button', { class: 'btn', type: 'button', onclick: function () { membersCache = null; render(); } }, t('btn_refresh'))));
+    main.appendChild(h('p', { class: 'note' }, t('members_server_note')));
+    if (membersError) main.appendChild(h('div', { class: 'alert warn' }, t('auth_error', { msg: membersError })));
+    if (!membersCache) { main.appendChild(h('div', { class: 'card' }, h('p', { class: 'note' }, t('members_loading')))); loadMembers(true); return; }
+    var order = { Pending: 0, Approved: 1, Rejected: 2 };
+    var rows = membersCache.slice().sort(function (a, b) {
+      return order[a.approval] - order[b.approval] || (a.created_at < b.created_at ? 1 : -1);
+    });
+    if (!rows.length) { main.appendChild(h('div', { class: 'card' }, t('members_empty'))); return; }
+    function apply(p, change) {
+      A.updateMember(p.user_id, change).then(function (row) {
+        membersCache = membersCache.map(function (x) { return x.user_id === row.user_id ? row : x; });
+        upsertLocalUser(P.toLocalUser(row, false)); save();
+        toast(t('member_updated', { id: row.reg_id })); render();
+      }).catch(function (e) { toast(t('auth_error', { msg: String(e && e.message || e) }), true); });
+    }
+    append(main, rows.map(function (p) {
+      var self = p.user_id === auth.user.id;
+      var typeSel = codeSelect('user_type', L.USER_TYPE, p.role || 'USER');
+      typeSel.id = 'type_' + p.user_id;
+      var boxes = territoryChecks(p.manage_territory);
+      var terrWrap = h('fieldset', { class: 'territory-set', hidden: p.role !== 'ADMIN' },
+        h('legend', null, t('f_manage_territory')), h('div', { class: 'checks' }, boxes),
+        h('small', { class: 'note' }, t('manage_territory_note')));
+      typeSel.addEventListener('change', function () { terrWrap.hidden = typeSel.value !== 'ADMIN'; });
+      var reqTerr = h('select', { name: 'territory_cd' }, h('option', { value: '' }, '-'),
+        L.TERRITORY_CD.map(function (c) { return h('option', { value: c, selected: c === p.territory_cd }, terrLabel(c)); }));
+      function picked() { return boxes.map(function (b) { return b.querySelector('input'); }).filter(function (x) { return x.checked; }).map(function (x) { return x.value; }).join('; '); }
+      function settings() {
+        var role = typeSel.value;
+        return { role: role, manage_territory: role === 'ADMIN' ? picked() : '', territory_cd: reqTerr.value };
+      }
+      var actions = h('div', { class: 'btn-row' });
+      if (p.approval !== 'Approved') actions.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: function () { apply(p, Object.assign({ approval: 'Approved' }, settings())); } }, t('member_approve')));
+      if (p.approval === 'Pending') actions.appendChild(h('button', { class: 'btn btn-danger', type: 'button', onclick: function () { apply(p, { approval: 'Rejected' }); } }, t('member_reject')));
+      if (p.approval === 'Approved') {
+        actions.appendChild(h('button', { class: 'btn btn-primary', type: 'button', onclick: function () {
+          var ch = settings(); if (self) { delete ch.role; ch.manage_territory = picked(); }
+          apply(p, ch);
+        } }, t('member_save_settings')));
+        if (!self) actions.appendChild(h('button', { class: 'btn', type: 'button', onclick: function () { apply(p, { approval: 'Rejected' }); } }, t('member_suspend')));
+      }
+      if (self) typeSel.disabled = true; // 자기 권한은 스스로 내릴 수 없습니다(서버에서도 막음)
+      return h('div', { class: 'card member-card' },
+        h('div', { class: 'member-head' },
+          h('span', { class: 'status ' + (p.approval === 'Approved' ? 'blue' : p.approval === 'Pending' ? 'red' : 'black') }, t('approval_' + p.approval)),
+          h('strong', null, p.name + ' · ' + p.reg_id + (self ? ' (' + t('member_self') + ')' : '')),
+          h('span', { class: 'sub' }, [
+            p.is_dealer ? t('dealer_yes') + (p.dealer_name ? ' · ' + p.dealer_name : '') : t('dealer_no'),
+            P.countryName(p.country_cd, lang) + ' / ' + p.region, p.phone, p.e_mail,
+            t('member_joined', { date: L.displayDate(String(p.created_at || '').slice(0, 10)) })
+          ].join(' · ')),
+          p.approved_at ? h('span', { class: 'sub' }, t('member_approved_by', { by: p.approved_by === auth.user.id ? t('member_self') : ((membersCache.filter(function (x) { return x.user_id === p.approved_by; })[0] || {}).name || '-'), date: L.displayDate(String(p.approved_at).slice(0, 10)) })) : null),
+        h('div', { class: 'form-grid' }, field(t('f_user_type'), typeSel),
+          field(t('f_req_territory'), reqTerr, { hint: t('req_territory_note') })),
+        terrWrap, actions);
+    }));
+  }
+
+  // 예시 데이터 시연: 이 브라우저의 예시 계정 승인·권한
+  function viewMembersLocal() {
     var admin = me();
     var order = { Pending: 0, Approved: 1, Rejected: 2 };
     var users = db.users.slice().sort(function (a, b) {
@@ -955,7 +1341,7 @@
       typeSel.id = 'type_' + u.reg_id;
       var mine = L.listTerritories(u.manage_territory);
       var boxes = L.TERRITORY_CD.map(function (c) {
-        return h('label', { class: 'check' }, h('input', { type: 'checkbox', value: c, checked: mine.indexOf(c) !== -1 }), c);
+        return h('label', { class: 'check' }, h('input', { type: 'checkbox', value: c, checked: mine.indexOf(c) !== -1 }), terrLabel(c));
       });
       var terrWrap = h('fieldset', { class: 'territory-set', hidden: (u.user_type || 'USER') !== 'ADMIN' },
         h('legend', null, t('f_manage_territory')), h('div', { class: 'checks' }, boxes),
@@ -973,7 +1359,7 @@
         h('div', { class: 'member-head' },
           h('span', { class: 'status ' + (ap === 'Approved' ? 'blue' : ap === 'Pending' ? 'red' : 'black') }, t('approval_' + ap)),
           h('strong', null, u.req_name + ' · ' + u.reg_id),
-          h('span', { class: 'sub' }, [u.dealer, u.territory_cd, u.e_mail, t('member_joined', { date: L.displayDate(u.join_date) })].filter(Boolean).join(' · ')),
+          h('span', { class: 'sub' }, [u.dealer, terrLabel(u.territory_cd), u.e_mail, t('member_joined', { date: L.displayDate(u.join_date) })].filter(Boolean).join(' · ')),
           u.approved_by ? h('span', { class: 'sub' }, t('member_approved_by', { by: u.approved_by, date: L.displayDate(u.approved_date) })) : null),
         h('div', { class: 'form-grid' }, field(t('f_user_type'), typeSel)),
         terrWrap, actions);
@@ -1110,7 +1496,7 @@
       h('thead', null, h('tr', null, cols.map(function (c) { return h('th', null, t(c[1])); }))),
       h('tbody', null, rows.map(function (r) {
         return h('tr', null, cols.map(function (c) {
-          var v = c[0] === 'minutes' ? (r.logout_date ? L.formatDuration(r.minutes) : t('log_open')) : r[c[0]];
+          var v = c[0] === 'minutes' ? (r.logout_date ? L.formatDuration(r.minutes, lang) : t('log_open')) : r[c[0]];
           return h('td', { class: 'nowrap' }, String(v == null ? '' : v));
         }));
       })))));
@@ -1149,7 +1535,8 @@
       var wb = XLSX.utils.book_new();
       Object.keys(sheets).forEach(function (n) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sheets[n]), n); });
       var out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      download('기술지원DB_' + L.toDateStr(now()) + (db._sample ? '_예시데이터' : '') + '.xlsx',
+      // 시트 이름·머리행은 가져오기와 짝이 맞아야 하므로 언어와 무관하게 DB 필드명 그대로 둡니다
+      download(t('file_db') + '_' + L.toDateStr(now()) + (db._sample ? '_' + t('file_sample') : '') + '.xlsx',
         new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     }
     main.appendChild(h('div', { class: 'page-head' }, h('h1', null, t('data_title'))));
@@ -1171,9 +1558,12 @@
   }
 
   // ── 라우터 ──────────────────────────────────────────────
+  function currentRoute() { return (location.hash.replace(/^#\/?/, '') || (me() ? 'request' : 'login')).split('/')[0]; }
   function render() {
     var parts = (location.hash.replace(/^#\/?/, '') || (me() ? 'request' : 'login')).split('/');
     var route = parts[0], arg = parts[1] ? decodeURIComponent(parts[1]) : '';
+    // 서버로 로그인했는데 기본 정보가 없으면 먼저 기본 정보를 받습니다(데이터 화면은 그대로 열어 둠)
+    if (auth.checked && auth.user && !auth.profile && route !== 'data') route = 'profile';
     renderHeader(route);
     main.textContent = '';
     closeDialog();
@@ -1188,6 +1578,8 @@
       case 'manual': viewManual(); break;
       case 'members': viewMembers(); break;
       case 'mails': viewMails(); break;
+      case 'profile': viewProfile(); break;
+      case 'manual-admin': viewManualAdmin(); break;
       default: viewLogin();
     }
     if (afterRender) {
@@ -1200,6 +1592,15 @@
   }
   window.addEventListener('hashchange', render);
   render();
+  // 서버 로그인 상태 확인(구글·카카오에서 돌아온 경우 포함) → 다시 그림
+  refreshAuth().then(function () {
+    if (auth.user && /^(#\/?)?(login)?$/.test(location.hash)) location.hash = auth.profile ? (me() ? '#/request' : '#/profile') : '#/profile';
+    else render();
+    A.onChange(function (event, user) {
+      var was = auth.user && auth.user.id, now2 = user && user.id;
+      if (was !== now2) { if (!now2) resetAuth(); refreshAuth().then(render); }
+    });
+  });
   // 저장된 매뉴얼 색인을 다 읽으면 매뉴얼 화면·AI 회신 화면을 다시 그립니다
   manualsReady.then(function () { if (/^#\/(manual|detail)/.test(location.hash)) render(); });
 })();

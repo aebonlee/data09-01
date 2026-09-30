@@ -1,5 +1,21 @@
 # Supabase DB 스크립트 — 지게차 AI 기술지원
 
+## 이 사이트의 회원·매뉴얼 — `2026-09-30_data0901_auth.sql` (강사 공용 프로젝트)
+
+https://hdx-ps.jobability.co.kr/ 의 구글·카카오 로그인 회원·승인과 매뉴얼 색인 보관용입니다. **강사가 공용 Supabase 프로젝트 SQL Editor 에서 한 번 실행**합니다(여러 번 실행해도 안전). 수강생 본인 프로젝트용인 아래 `schema.sql` 과는 별개입니다.
+
+| 개체 | 용도 |
+|---|---|
+| `data0901_profiles` | 회원 기본 정보(이름·전화·이메일·딜러 여부·딜러사명·국가·지역·territory_cd) + 승인(`Pending`/`Approved`/`Rejected`)·권한(USER/ADMIN)·관리 지역 |
+| `data0901_is_admin()` · `data0901_is_approved()` | 판정 함수 — 관리자 = www 관리자 또는 이 사이트에서 승인된 ADMIN |
+| `data0901_guard_profile()` | 트리거 — 가입은 늘 승인 대기로, 승인·권한·관리 지역은 관리자만 바꿈(관리자가 자기 권한을 스스로 내리는 것도 막음) |
+| 버킷 `data0901-manuals` (private) | 매뉴얼 쪽별 텍스트 색인(`*.manual.json.gz`). 읽기 = 승인 회원, 올리기·지우기 = 관리자 |
+
+- 비로그인(anon)은 회원 표·판정 함수·매뉴얼 파일 모두 막혀 있습니다. 공용 `www_profiles`·`www_admins` 는 읽기만 하고 구조를 바꾸지 않습니다.
+- 검증: `./scripts/sqltest/run.sh` — 임시 로컬 PostgreSQL 에 공용 개체 스텁(`scripts/sqltest/05_shared_stub.local.sql`)을 깔고 적용해 권한을 확인합니다(`30_data0901_shared.local.sql`).
+
+## 수강생 본인 프로젝트용 — `schema.sql`
+
 이 폴더에는 지금 브라우저에 저장되는 기술지원 기록을 Supabase(PostgreSQL) 표로 옮기기 위한 스크립트가 들어 있습니다.
 스크립트만 먼저 준비해 둔 단계이며, 앱은 아직 localStorage 로 동작합니다.
 
