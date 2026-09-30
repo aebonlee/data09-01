@@ -1,0 +1,7 @@
+﻿reg_id,req_name,e_mail,phone,country_cd,dealer,join_date,user_type,territory_cd,approval,approved_by,approved_date,manage_territory
+demo_user01,예시 정비사1,user01@example.com,010-0000-0001,KR,예시딜러 경기북부,2026-07-30,USER,경기,Approved,demo_admin,2026-07-30,
+demo_user02,예시 정비사2,user02@example.com,010-0000-0002,KR,예시딜러 경남,2026-08-14,USER,경남,Approved,demo_admin,2026-08-14,
+demo_eu01,Sample Mechanic EU,eu01@example.com,+00-000-0003,DE,Sample Dealer Europe,2026-08-19,USER,Europe,Approved,demo_admin_gl,2026-08-19,
+demo_admin,예시 PS담당자,ps@example.com,010-0000-0009,KR,본사 PS팀(예시),2026-06-30,ADMIN,Direct Sales,Approved,(첫 관리자 자동 승인),2026-06-30,경기; 경남; 전라; 충청; 강원; Direct Sales
+demo_admin_gl,예시 해외PS담당자,ps-global@example.com,010-0000-0008,KR,본사 PS팀(예시),2026-07-10,ADMIN,Direct Sales,Approved,demo_admin,2026-07-10,Europe; North America; South America; Middle East; Africa; Asia; Oceania
+demo_new01,예시 신규정비사,new01@example.com,010-0000-0010,KR,예시딜러 충청,2026-09-28,USER,충청,Pending,,,

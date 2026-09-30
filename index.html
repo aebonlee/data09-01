@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- http 로 들어오면 https 로 옮깁니다. 옛 주소(github.io)가 http:// 로 넘겨 주는데, 로그인 뒤 돌아올 주소는 https 만 허용되어 있습니다 -->
+  <script>if (location.protocol === 'http:' && /(^|\.)jobability\.co\.kr$/.test(location.hostname)) location.replace('https://' + location.host + location.pathname + location.search + location.hash);</script>
+  <title>AI 기술지원 · AI Tech Support — 지게차 현장 기술지원</title>
+  <meta name="description" content="지게차 현장 정비사의 기술 문의를 정형 양식으로 접수하고 모델별 매뉴얼 근거로 AI 1차 회신, 미해결 건은 PS 담당자에게 넘기는 기술지원 플랫폼(한국어/English). 구글·카카오 로그인 후 관리자 승인.">
+  <!-- 회원 전용 업무 도구라 검색 노출은 막습니다(링크 공유 미리보기는 OG 로 뜸) -->
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="canonical" href="https://hdx-ps.jobability.co.kr/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="AI 기술지원 · AI Tech Support">
+  <meta property="og:url" content="https://hdx-ps.jobability.co.kr/">
+  <meta property="og:title" content="AI 기술지원 · AI Tech Support — 지게차 현장 기술지원">
+  <meta property="og:description" content="현장 기술 문의 접수 · 매뉴얼 근거 AI 회신 · PS 담당자 연계. 한국어/English, 구글·카카오 로그인.">
+  <meta property="og:image" content="https://hdx-ps.jobability.co.kr/og-image.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:locale" content="ko_KR">
+  <meta property="og:locale:alternate" content="en_US">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="https://hdx-ps.jobability.co.kr/og-image.png">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip" href="#main" data-t="skip">본문으로 건너뛰기</a>
+  <header class="site-header">
+    <div class="inner header-inner">
+      <a class="brand" href="#/list">
+        <span class="brand-name" data-t="brand">AI 기술지원</span>
+        <span class="brand-sub" data-t="brandSub">지게차 현장 기술지원 접수·조회</span>
+      </a>
+      <nav class="nav" id="nav" aria-label="주 메뉴" data-t-attr="aria-label:nav_label"></nav>
+      <div class="header-tools">
+        <div class="lang-toggle" role="group" aria-label="화면 언어" data-t-attr="aria-label:lang_toggle">
+          <button type="button" value="ko" lang="ko" aria-pressed="true">KO</button>
+          <button type="button" value="en" lang="en" aria-pressed="false">EN</button>
+        </div>
+        <span id="whoami" class="whoami"></span>
+        <button type="button" id="authBtn" class="btn btn-ghost"></button>
+      </div>
+    </div>
+  </header>
+
+  <div id="sampleBanner" class="sample-banner" hidden></div>
+
+  <main id="main" class="inner main" tabindex="-1"></main>
+
+  <footer class="site-footer">
+    <div class="inner">
+      <p class="footer-company">
+        <span data-t="footer_address">경기도 성남시 분당구 분당수서로 477 HD현대글로벌R&amp;D센터(GRC) 13층 (13553)</span>
+        <span data-t="footer_phone">대표전화 : 02-479-7142   고객 상담 및 제품 문의 : 1899-7282</span>
+        <span data-t="footer_biz">사업자등록번호 : 493-81-02117</span>
+      </p>
+      <p class="footer-copy">COPYRIGHT © 2023 HD Hyundai XiteSolution. ALL RIGHTS RESERVED.</p>
+      <p class="footer-note" data-t="footer">1단계 시연판 · 데이터는 이 브라우저에만 저장됩니다</p>
+    </div>
+  </footer>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="dialog" class="dialog">
+    <form method="dialog" class="dialog-body">
+      <h2 id="dialogTitle"></h2>
+      <div id="dialogContent"></div>
+      <div class="dialog-actions" id="dialogActions">
+        <button class="btn" value="close" data-t="btn_close">닫기</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 로컬 파일(file://)로 열어도 돌도록 module 이 아닌 일반 스크립트로 불러옵니다.
+       pdf.js(vendor/pdfjs)는 「매뉴얼 근거」 화면에서 PDF 를 불러올 때만 읽어 들입니다.
+       supabase-js(vendor/supabase, 2.116.0 UMD)는 구글·카카오 로그인·회원·매뉴얼 보관에 씁니다. -->
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/supabase/supabase.js"></script>
+  <script src="js/logic.js"></script>
+  <script src="js/manual.js"></script>
+  <script src="js/manual-store.js"></script>
+  <script src="js/i18n.js"></script>
+  <script src="js/profile.js"></script>
+  <script src="js/originals.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/sample-data.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
