@@ -76,6 +76,15 @@ PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$ORIG_SQL"
 PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$SHARED_SQL"
 
+# 기술지원 기록 서버 저장(등록·문의·회신·소스·메일·접속 Log) — auth SQL 다음에 두 번(재실행 안전).
+# REC_SQL 로 일부러 깨뜨린 사본을 넣을 수 있다.
+REC_SQL="${REC_SQL:-$ROOT/supabase/2026-09-30_data0901_records.sql}"
+echo "③-4 $(basename "$REC_SQL") 적용 · 재적용 (첫 적용 전후로 data0901_ 밖 카탈로그·데이터 대조)"
+"${PSQL[@]}" -f "$ROOT/scripts/sqltest/34_data0901_records_before.local.sql"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$REC_SQL"
+PGOPTIONS="-c client_min_messages=warning" "${PSQL[@]}" -f "$REC_SQL"
+"${PSQL[@]}" -f "$ROOT/scripts/sqltest/34_data0901_records_after.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
+
 echo "④ 공통 불변식 검증"
 "${PSQL[@]}" -f "$ROOT/scripts/sqltest/10_common.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
 
@@ -92,6 +101,15 @@ echo "⑦ 제공 자료 원본(originals/) 검증"
 
 echo "⑧ 수강생 관리자 지정 SQL 검증"
 "${PSQL[@]}" -f "$ROOT/scripts/sqltest/36_data0901_student_admin.local.sql" 2>&1 | sed 's/^psql:.*NOTICE:  //'
+
+echo "⑨ 기술지원 기록(등록·문의·회신·소스·메일·접속 Log) 검증"
+# 37 은 파일을 스스로 지웠다가 다시 적용한다(\ir) — 깨뜨린 사본을 검사할 때는 그 사본을 가리키는 임시 사본을 쓴다
+REC_TEST="$ROOT/scripts/sqltest/37_data0901_records.local.sql"
+if [ "$REC_SQL" != "$ROOT/supabase/2026-09-30_data0901_records.sql" ]; then
+  sed "s#\\ir ../../supabase/2026-09-30_data0901_records.sql#\\i '$REC_SQL'#" "$REC_TEST" > "$TMP/37.local.sql"
+  REC_TEST="$TMP/37.local.sql"
+fi
+"${PSQL[@]}" -f "$REC_TEST" 2>&1 | sed 's/^psql:.*NOTICE:  //'
 
 echo ""
 echo "SQL 검증 통과."

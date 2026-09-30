@@ -754,4 +754,17 @@ test('예시 데이터 자체 정합성: 코드값·ref_no 형식·참조·소�
   assert.deepEqual(L.psRecipients(db, db.mains.find(m => m.reg_id === 'demo_user01').ref_no).to, ['ps@example.com']);
 });
 
+console.log('첫 화면 지표 (v0.8)');
+test('지표는 기록에서 센다 — 전체(관리자)·본인(정비사)', () => {
+  let db = baseDb();
+  db = L.createRequest(db, form, user, NOW, []).db;
+  db = L.createRequest(db, { ...form, serial_no: 'X2' }, other, NOW, []).db;
+  db = L.addReply(db, '202609280001', { reply_content: '회신' }, NOW).db;
+  const all = L.kpis(db, null, NOW), mine = L.kpis(db, 'u1', NOW);
+  assert.deepEqual([all.total, all.submitted, all.answered, all.completed, all.month, all.replies, all.models], [2, 1, 1, 0, 2, 1, 1]);
+  assert.deepEqual([mine.total, mine.answered, mine.submitted], [1, 1, 0]);
+  assert.equal(L.kpis(db, null, new Date(2026, 9, 5)).month, 0, '다음 달이면 이번 달 등록 0');
+  assert.deepEqual(L.recentRequests(db, null, 1).map(m => m.ref_no), ['202609280002']);
+});
+
 console.log(process.exitCode ? '\n실패가 있습니다.' : '\n전체 ' + passed + '개 통과');

@@ -10,7 +10,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$(mktemp -d)"
-trap 'rm -rf "$OUT"' EXIT
+trap 'rm -rf "$OUT" "$OUT.cache"' EXIT
 
 SITE_FILES=(index.html css js vendor samples og-image.png CNAME .nojekyll)
 for f in "${SITE_FILES[@]}"; do
@@ -29,4 +29,4 @@ fi
 echo "배포할 파일 $(find "$OUT" -type f | wc -l | tr -d ' ')개"
 # --add 는 쓰지 않는다: 이 사이트는 해시 파일이 없고, --add 는 예전 배포본의 파일을 지우지 않고 남긴다
 #   (민감한 파일이 한 번 섞이면 계속 공개된다). 매번 배포본 전체로 gh-pages 를 바꾼다.
-npx --yes gh-pages -d "$OUT" --dotfiles -m "배포: $(git -C "$ROOT" rev-parse --short HEAD)"
+CACHE_DIR="${CACHE_DIR:-$OUT.cache}" npx --yes gh-pages -d "$OUT" --dotfiles -m "배포: $(git -C "$ROOT" rev-parse --short HEAD)"

@@ -53,7 +53,8 @@
 
 - 화면 언어는 머리의 **KO | EN** 단추로 바꿉니다(처음에는 브라우저 언어를 따름, 고른 언어는 기억).
 - 파일로 연 화면(`file://`)에서는 로그인할 수 없고, 아래 예시 데이터 시연만 됩니다.
-- 기술지원 기록은 지금도 이 브라우저(localStorage)에 저장됩니다. 서버에 있는 것은 회원·승인 정보와 매뉴얼 색인입니다.
+- **기술지원 기록(등록·문의·회신·소스·PS 메일·접속 Log)은 서버 표(`data0901_*`)에 저장됩니다**(v0.8). 정비사는 자기 건, 관리자는 모든 회원의 건과 접속 Log 를 봅니다. 로그인하면 「첫 화면」에 흐름과 현황(기록에서 센 숫자)이 보입니다.
+- 서버 표는 강사가 `supabase/2026-09-30_data0901_records.sql` 을 SQL Editor 에서 한 번 실행해야 생깁니다. 그 전에는 화면 위에 「서버 기록 준비 전」 띠가 뜨고 예전처럼 이 브라우저에 저장됩니다. 브라우저에 쌓인 기록은 관리자가 「데이터 → 브라우저 기록 서버로 올리기」로 한 번 옮깁니다.
 
 ### 시연(로그인 없이)
 
@@ -72,9 +73,9 @@
 | `demo_admin` | ADMIN | PS 담당자(관리 지역: 국내 5개 + Direct Sales) — 전체 조회·AI 회신·회원 승인·메일 대기·소스 등록·접속 Log |
 | `demo_admin_gl` | ADMIN | 해외 PS 담당자(관리 지역: 해외 7개) |
 
-- 데이터는 **이 브라우저(localStorage)에만** 저장됩니다. 보관·이동은 「데이터」 메뉴의 엑셀 내보내기/가져오기로 합니다.
+- 시연 데이터는 **이 브라우저(localStorage)에만** 저장됩니다(서버 기록과 섞이지 않음). 보관·이동은 「데이터」 메뉴의 엑셀 내보내기/가져오기로 합니다.
 - 예시 파일: `samples/예시데이터_기술지원DB.xlsx`(시트 7개 — 메일 시트 포함) 와 시트별 CSV. 모두 가상 데이터입니다.
-- 로직 테스트: `node test/logic.test.mjs`, `node test/profile-i18n.test.mjs` (기본 정보 검증·두 언어 문구 짝 맞춤), `node test/originals.test.mjs` (제공 자료 경로·형식이 서버 SQL 과 짝) — 의존성 없음 / SQL 검증: `./scripts/sqltest/run.sh` (임시 로컬 PostgreSQL)
+- 로직 테스트: `node test/logic.test.mjs`, `node test/profile-i18n.test.mjs` (기본 정보 검증·두 언어 문구 짝 맞춤), `node test/originals.test.mjs` (제공 자료 경로·형식이 서버 SQL 과 짝), `node test/server-db.test.mjs` (서버 행 변환·바뀐 것 고르기·브라우저 기록 옮기기·SQL 과 짝) — 의존성 없음 / 색 대비: `node scripts/check-contrast.mjs` / SQL 검증: `./scripts/sqltest/run.sh` (임시 로컬 PostgreSQL)
 - **매뉴얼 PDF 는 이 저장소에 없습니다**(회사 저작물). 승인 회원은 관리자가 「매뉴얼 등록」으로 올린 매뉴얼(쪽별 텍스트 색인, 비공개 저장소)을 「매뉴얼 근거」에서 바로 씁니다. 내 PC 의 PDF 를 골라 브라우저 안에서만 읽는 방식도 그대로 됩니다. PDF 가 크면 `python3 scripts/manual_to_json.py <PDF 또는 폴더>` 로 쪽별 텍스트 JSON 을 만들어 불러와도 됩니다(결과 JSON 도 커밋하지 않습니다).
 - 예시 파일 다시 만들기: `node scripts/make-samples.js`
 

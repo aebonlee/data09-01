@@ -234,6 +234,7 @@
 
   root.TSAuth = {
     SITE_ID: P.SITE_ID, BUCKET: BUCKET, reason: reason, enabled: function () { return !reason(); },
+    client: sb,   // 기술지원 기록 표(js/server-db.js)가 같은 로그인 세션으로 씁니다
     redirectTo: redirectTo, cleanUrl: cleanUrl, signIn: signIn, signOut: signOut, getUser: getUser, onChange: onChange,
     loadState: loadState, saveProfile: saveProfile, listMembers: listMembers, updateMember: updateMember,
     objectName: objectName, listManuals: listManuals, downloadManual: downloadManual, uploadManual: uploadManual,

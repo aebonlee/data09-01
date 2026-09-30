@@ -22,6 +22,21 @@ auth SQL 다음에 한 번 실행합니다(재실행 안전, 두 파일을 어�
 - 비로그인(anon)은 회원 표·판정 함수·매뉴얼 파일 모두 막혀 있습니다. 공용 `www_profiles`·`www_admins` 는 읽기만 하고 구조를 바꾸지 않습니다.
 - 검증: `./scripts/sqltest/run.sh` — 임시 로컬 PostgreSQL 에 공용 개체 스텁(`scripts/sqltest/05_shared_stub.local.sql`)을 깔고 적용해 권한을 확인합니다(`30_data0901_shared.local.sql`, 원본 `35_data0901_originals.local.sql`, 관리자 지정 `36_data0901_student_admin.local.sql`).
 
+### 추가 — `2026-09-30_data0901_records.sql` (기술지원 기록 서버 저장, v0.8)
+
+auth SQL 다음에 **이 한 파일**을 한 번 실행합니다(재실행 안전, 데이터는 지우지 않음). 수강생 `schema.sql` 의 표 설계(필드 이름·제약·RLS)를 그대로 옮기고 이름에 `data0901_` 만 붙였습니다. `data0901_` 밖의 개체(`www_*`·`user_profiles`·`auth.*`·접두사 없는 개체)는 만들지도 바꾸지도 않습니다 — 하네스가 첫 적용 전후의 카탈로그(표·열·제약·함수·정책·트리거·버킷·스키마)와 공용 표 내용을 대조해 확인합니다.
+
+| 개체 | 용도 |
+|---|---|
+| `data0901_requests` · `data0901_inquiries` · `data0901_replies` | 등록·문의·회신. 정비사 = 본인 건만, 관리자 = 전부. 회신은 관리자만 씀. 삭제는 관리자만 |
+| `data0901_sources` | 소스등록(모델 대문자, UNIQUE(model)). 읽기 = 승인 회원, 쓰기 = 관리자 |
+| `data0901_mails` · 순번 `data0901_mail_no_seq` | PS 메일 대기. 읽기·보냄 표시 = 관리자. 정비사는 `data0901_queue_mail()` 로 자기 건 메일만 넣음(번호·받는 사람은 서버가) |
+| `data0901_access_log` | 접속 Log — INSERT·SELECT 만(UPDATE·DELETE 정책·권한 없음). 로그아웃 시각은 `data0901_close_access_log(id)` 로 본인 기록에 한 번만. 읽기 = 본인 / 관리자 전부 |
+| `data0901_owns_request()` · `data0901_last_ref_no()` · `data0901_find_duplicates()` | 정책용 판정 · 그날 마지막 등록번호(번호 겹침 방지) · 중복 검토(남의 건은 번호·상태·등록일만) |
+| 트리거 함수 5개 | 계정·아이디·첫 상태·로그인 시각·메일 번호는 서버가 정함, 정비사는 회신 상태로 못 바꾸고 종료 건은 못 고침 |
+
+함수는 전부 `search_path = public` 고정, `PUBLIC`·`anon` 실행 권한을 끊었습니다. 검증: `./scripts/sqltest/run.sh` 의 ③-4(첫 적용 전후 대조, `34_*`)·⑨(`37_data0901_records.local.sql` — 지웠다가 다시 적용 + 역할별 권한).
+
 ## 수강생 본인 프로젝트용 — `schema.sql`
 
 > **드림아이티비즈 공용 프로젝트에서 실행하지 마세요.** 접두사 없는 이름(`users`·`is_admin()` 등)을 써서, 공용 프로젝트에서는 같은 이름의 기존 함수를 덮어써 다른 사이트의 관리자 판정을 바꿉니다(2026-09-30 실제 사고). 그래서 파일 맨 앞에 `www_profiles`·`user_profiles` 가 있는 DB 에서는 스스로 멈추는 가드를 넣었습니다.
