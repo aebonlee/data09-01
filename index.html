@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- http 로 들어오면 https 로 옮깁니다. 옛 주소(github.io)가 http:// 로 넘겨 주는데, 로그인 뒤 돌아올 주소는 https 만 허용되어 있습니다 -->
+  <script>if (location.protocol === 'http:' && /(^|\.)jobability\.co\.kr$/.test(location.hostname)) location.replace('https://' + location.host + location.pathname + location.search + location.hash);</script>
   <title>AI 기술지원 · AI Tech Support — 지게차 현장 기술지원</title>
   <meta name="description" content="지게차 현장 정비사의 기술 문의를 정형 양식으로 접수하고 모델별 매뉴얼 근거로 AI 1차 회신, 미해결 건은 PS 담당자에게 넘기는 기술지원 플랫폼(한국어/English). 구글·카카오 로그인 후 관리자 승인.">
   <!-- 회원 전용 업무 도구라 검색 노출은 막습니다(링크 공유 미리보기는 OG 로 뜸) -->
